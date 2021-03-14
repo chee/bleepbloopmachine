@@ -1,0 +1,7 @@
+{
+  "cpu": {
+    "fqbn": "adafruit:samd:adafruit_pygamer_m4",
+    "name": "Adafruit PyGamer M4 Express (SAMD51)",
+    "port": "serial:///dev/ttyACM0"
+  }
+}
