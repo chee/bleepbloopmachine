@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.0.0)
+cmake_minimum_required(VERSION 3.19.0)
 project(bleepbloopmachine CXX)
-add_executable(bleepbloopmachine main.cc)
+add_executable(bleepbloopmachine src/main.cc)
 target_link_arduino_libraries(bleepbloopmachine AUTO_PUBLIC)
+target_enable_arduino_upload(bleepbloopmachine)
