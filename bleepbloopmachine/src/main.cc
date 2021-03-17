@@ -88,28 +88,35 @@ public:
   int note = 0;
   int octave = 3;
   bool active = false;
-  AudioSynthWaveform *synth;
-  AudioEffectEnvelope *env;
+  float attack = 10.0;
+  float decay = 40.0;
+  float delay = 0.0;
   Waveform waveform;
   float frequency() { return freq[note][octave]; }
-  void play() {
-    if (!active) {
-      return;
-    }
-    AudioNoInterrupts();
-    synth->frequency(frequency());
-    synth->begin(0.2, frequency(), (int)waveform);
-    env->noteOn();
-    AudioInterrupts();
+  void activate(int n, int o) {
+    note = n;
+    octave = o;
+    active = true;
   }
   void activate() { active = true; }
-  void noteUp() { note = wrapping_add(note, 11); }
+  void noteUp() {
+    note = wrapping_add(note, 11);
+  }
   void noteDown() { note = wrapping_sub(note, 11); }
   void octaveUp() { octave = wrapping_add(octave, 8); }
   void octaveDown() { octave = wrapping_sub(octave, 8); }
+  SoundBlock cut() {
+    active = false;
+    SoundBlock s;
+    s.note = note;
+    s.octave = octave;
+    s.active = true;
+    s.attack = attack;
+    s.decay = decay;
+    s.delay = delay;
+    return s;
+  }
   SoundBlock() {}
-  SoundBlock(AudioSynthWaveform *s, Waveform w, AudioEffectEnvelope *e)
-      : synth{s}, waveform{w}, env{e} {}
 };
 
 class Wave {
@@ -124,18 +131,23 @@ public:
   Wave(String n, AudioSynthWaveform &s, Waveform f, AudioEffectEnvelope &e)
       : name{n}, form{f}, synth{s}, env{e} {
     for (auto i = 0; i < 16; i++) {
-      sounds[i] = SoundBlock(&synth, form, &env);
+      sounds[i] = SoundBlock();
     }
-    env.attack(100.0);
-    env.decay(10.0);
+    synth.begin((int)form);
+    synth.amplitude(1.0);
     env.sustain(0.0);
   }
   int stepBlockIndex(int currentStep) { return currentStep / rate % 16; }
   void play(int blockIndex) {
-    Serial.println(blockIndex);
-    Serial.println(sounds[0].frequency());
     auto sound = sounds[blockIndex];
-    sound.play();
+    if (!sound.active) {
+      return;
+    }
+    synth.frequency(sound.frequency());
+    env.attack(sound.attack);
+    env.decay(sound.decay);
+    env.delay(sound.delay);
+    env.noteOn();
   }
   void step(int currentTick) {
     auto idx = stepBlockIndex(currentTick);
@@ -144,21 +156,25 @@ public:
       play(idx);
     }
   }
-  void updateDisplay(Adafruit_GFX *display) {
-    for (int i = 0; i < 0xf; i++) {
-      auto sound = sounds[i];
-      if (sound.active) {
-        Point point = getCoord(i);
-        String note = note_names[sound.note];
-        display->drawChar(point.x + 2, point.y + 2, note[0], ST7735_BLACK,
-                          ST7735_BLACK, 1);
-        if (note.length() == 2) {
-          display->drawChar(point.x + 9, point.y + 2, '#', ST7735_BLACK,
+  void updateDisplay(Adafruit_GFX *display, menu_mode mode) {
+    for (int i = 0; i <= 0xf; i++) {
+      if (mode == menu_mode::live) {
+        auto sound = &sounds[i];
+        if (sound->active) {
+          Point point = getCoord(i);
+          String note = note_names[sound->note];
+          display->drawChar(point.x + 2, point.y + 2, note[0], ST7735_BLACK,
                             ST7735_BLACK, 1);
+          if (note.length() == 2) {
+            display->drawChar(point.x + 9, point.y + 2, '#', ST7735_BLACK,
+                              ST7735_BLACK, 1);
+          }
+          display->fillRect(point.x + (sound->octave * 2), point.y, 2, 2,
+                            sound->octave * 10);
         }
-        display->fillRect(point.x + (sound.octave * 2), point.y,
-                          (sound.octave * 2), 2, ST7735_BLACK);
-      }
+      } else if (mode == menu_mode::menu1) {
+      } else if (mode == menu_mode::menu2) {
+        }
     }
   }
 };
@@ -193,6 +209,10 @@ public:
   int selectedBlockIndex = 0;
   int lastSelectedBlockIndex = 0;
   int currentStep = 0;
+  int lastNote = 0;
+  int lastOctave = 3;
+  SoundBlock clipboard;
+  bool hasClipboard = false;
   void step() {
     auto m = micros();
     if (m - lastMicros >= stepLength()) {
@@ -209,21 +229,21 @@ public:
     }
   }
   void updateGrid() {
-    AudioNoInterrupts();
     auto stepBlockIndex = selectedWave.stepBlockIndex(currentStep);
-    auto stepCoord = getCoord(stepBlockIndex);
-    display.fillRect(stepCoord.x, stepCoord.y, BLOCK_SIZE, BLOCK_SIZE,
-                     TICK_BLOCK_COLOR);
-    auto lastStepCord = getCoord(wrapping_sub(stepBlockIndex, 0xf));
-    display.fillRect(lastStepCord.x, lastStepCord.y, BLOCK_SIZE, BLOCK_SIZE,
-                     STANDARD_BLOCK_COLOR);
-    // then the selection box
+    // first comes blocks
+    for (auto i = 0; i <= 0xf; i++) {
+      auto coord = getCoord(i);
+      auto color =
+          stepBlockIndex == i ? TICK_BLOCK_COLOR : STANDARD_BLOCK_COLOR;
+      display.fillRect(coord.x, coord.y, BLOCK_SIZE, BLOCK_SIZE, color);
+    }
+    // then comes selection
     auto selectCoord = getCoord(selectedBlockIndex);
     display.drawRect(selectCoord.x, selectCoord.y, BLOCK_SIZE, BLOCK_SIZE,
                      ST7735_BLACK);
+
     // then the labels
-    selectedWave.updateDisplay(&display);
-    AudioInterrupts();
+    selectedWave.updateDisplay(&display, mode);
   }
   void handleButtons(uint32_t held, uint32_t released) {
     bool ab_mode = held & PAD_A && held & PAD_B;
@@ -232,35 +252,50 @@ public:
     bool none_mode = !ab_mode && !a_mode && !b_mode;
     switch (mode) {
     case menu_mode::live:
-      if (none_mode) {
-        if (released == PAD_B) {
-          selectedWave.sounds[selectedBlockIndex].activate();
+      if (b_mode) {
+        auto sound = &selectedWave.sounds[selectedBlockIndex];
+        if (released & PAD_UP) {
+          sound->noteUp();
         }
+        if (released & PAD_DOWN) {
+          sound->noteDown();
+        }
+        if (released & PAD_LEFT) {
+          sound->octaveDown();
+        }
+        if (released & PAD_RIGHT) {
+          sound->octaveUp();
+        }
+        lastNote = sound->note;
+        lastOctave = sound->octave;
+      } else if (none_mode) {
         if (released & PAD_UP && selectedBlockIndex > 0x3) {
           selectedBlockIndex -= 4;
+          return;
         }
         if (released & PAD_DOWN && selectedBlockIndex < 0xc) {
           selectedBlockIndex += 4;
+          return;
         }
         if (released & PAD_LEFT && selectedBlockIndex > 0x0) {
           selectedBlockIndex -= 1;
+          return;
         }
         if (released & PAD_RIGHT && selectedBlockIndex < 0xf) {
           selectedBlockIndex += 1;
+          return;
         }
-      }
-      if (b_mode) {
-        if (released & PAD_UP) {
-          selectedWave.sounds[selectedBlockIndex].noteUp();
-        }
-        if (released & PAD_DOWN) {
-          selectedWave.sounds[selectedBlockIndex].noteDown();
-        }
-        if (released & PAD_LEFT) {
-          selectedWave.sounds[selectedBlockIndex].octaveDown();
-        }
-        if (released & PAD_RIGHT) {
-          selectedWave.sounds[selectedBlockIndex].octaveUp();
+
+        if (released == PAD_B) {
+          selectedWave.sounds[selectedBlockIndex].activate(lastNote, lastOctave);
+        } else if (released == PAD_A) {
+          auto sound = &selectedWave.sounds[selectedBlockIndex];
+          if (sound->active) {
+            clipboard = sound->cut();
+            hasClipboard = true;
+          } else if (hasClipboard) {
+            selectedWave.sounds[selectedBlockIndex] = clipboard;
+          }
         }
       }
       return;
