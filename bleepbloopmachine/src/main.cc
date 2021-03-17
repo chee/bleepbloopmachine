@@ -122,13 +122,14 @@ public:
 class Wave {
 public:
   Waveform form;
-  String name;
+  unsigned char name;
   SoundBlock sounds[16];
   AudioSynthWaveform &synth;
   AudioEffectEnvelope &env;
   int rate = 4;
   int lastStepBlockIndex = 0;
-  Wave(String n, AudioSynthWaveform &s, Waveform f, AudioEffectEnvelope &e)
+  Wave(unsigned char n, AudioSynthWaveform &s, Waveform f,
+       AudioEffectEnvelope &e)
       : name{n}, form{f}, synth{s}, env{e} {
     for (auto i = 0; i < 16; i++) {
       sounds[i] = SoundBlock();
@@ -136,6 +137,9 @@ public:
     synth.begin((int)form);
     synth.amplitude(1.0);
     env.sustain(0.0);
+    if (form == Waveform::pulse) {
+      synth.pulseWidth(0.5);
+    }
   }
   int stepBlockIndex(int currentStep) { return currentStep / rate % 16; }
   void play(int blockIndex) {
@@ -174,7 +178,8 @@ public:
         }
       } else if (mode == menu_mode::menu1) {
       } else if (mode == menu_mode::menu2) {
-        }
+      }
+      display->drawChar(10, 10, name, ST77XX_BLACK, ST7735_BLACK, 1);
     }
   }
 };
@@ -190,10 +195,11 @@ AudioEffectEnvelope env_p;
 AudioEffectEnvelope env_s;
 AudioEffectEnvelope env_n;
 
-Wave wave_q("q", synth_q, Waveform::square, env_q);
-Wave wave_p("p", synth_p, Waveform::pulse, env_p);
-Wave wave_s("s", synth_s, Waveform::sine, env_s);
-Wave wave_n("n", synth_n, Waveform::sampleHold, env_n);
+Wave wave_q('q', synth_q, Waveform::square, env_q);
+Wave wave_p('p', synth_p, Waveform::pulse, env_p);
+Wave wave_s('s', synth_s, Waveform::sawtooth, env_s);
+Wave wave_n('n', synth_n, Waveform::sampleHold, env_n);
+Wave *waves[4] = {&wave_q, &wave_p, &wave_s, &wave_n};
 
 class BleepBloopMachine {
 public:
@@ -205,7 +211,7 @@ public:
   int selectedSoundIndex = 0;
   int selectedMenu1Control = 0;
   int selectedMenu2Control = 0;
-  Wave &selectedWave = wave_q;
+  int selectedWaveIndex = 0;
   int selectedBlockIndex = 0;
   int lastSelectedBlockIndex = 0;
   int currentStep = 0;
@@ -225,11 +231,14 @@ public:
       wave_p.step(currentStep);
       wave_s.step(currentStep);
       wave_n.step(currentStep);
-      updateGrid();
+      updateDisplay();
     }
   }
-  void updateGrid() {
-    auto stepBlockIndex = selectedWave.stepBlockIndex(currentStep);
+  Wave *selectedWave() { return waves[selectedWaveIndex]; }
+  void waveUp() { selectedWaveIndex = wrapping_sub(selectedWaveIndex, 3); }
+  void waveDown() { selectedWaveIndex = wrapping_add(selectedWaveIndex, 3); }
+  void updateDisplay() {
+    auto stepBlockIndex = selectedWave()->stepBlockIndex(currentStep);
     // first comes blocks
     for (auto i = 0; i <= 0xf; i++) {
       auto coord = getCoord(i);
@@ -239,11 +248,43 @@ public:
     }
     // then comes selection
     auto selectCoord = getCoord(selectedBlockIndex);
+    auto selectColor =
+        mode == menu_mode::live ? ST7735_BLACK : TICK_BLOCK_COLOR;
     display.drawRect(selectCoord.x, selectCoord.y, BLOCK_SIZE, BLOCK_SIZE,
                      ST7735_BLACK);
 
     // then the labels
-    selectedWave.updateDisplay(&display, mode);
+    selectedWave()->updateDisplay(&display, mode);
+
+    String bpmString = String(bpm);
+    display.drawChar(DISPLAY_WIDTH - 15, 10, bpmString[0], ST7735_BLACK,
+                     ST7735_BLACK, 1);
+    display.drawChar(DISPLAY_WIDTH - 10, 10, bpmString[1], ST7735_BLACK,
+                     ST7735_BLACK, 1);
+    if (bpmString.length() > 2) {
+      display.drawChar(DISPLAY_WIDTH - 5, 10, bpmString[2], ST7735_BLACK,
+                       ST7735_BLACK, 1);
+    }
+
+    // and the menus
+    if (mode == menu_mode::menu1) {
+      auto y = 110;
+      for (auto i = 0; i <= 3; i++) {
+        auto color = i == selectedMenu1Control ? ST7735_BLACK : ST7735_WHITE;
+        auto x = GRID_OFFSET_X + (i * (BLOCK_SIZE + GRID_GAP));
+        display.drawRect(x, y, BLOCK_SIZE, BLOCK_SIZE, color);
+      }
+
+      auto ty = y + (BLOCK_SIZE / 2) - 2;
+      display.drawChar(8 + GRID_OFFSET_X, ty, 'e', ST7735_BLACK, ST7735_BLACK,
+                       1);
+      display.drawChar(8 + GRID_OFFSET_X + 1 * (BLOCK_SIZE + GRID_GAP), ty, 'm',
+                       ST7735_BLACK, ST7735_BLACK, 1);
+      display.drawChar(8 + GRID_OFFSET_X + 2 * (BLOCK_SIZE + GRID_GAP), ty, 'f',
+                       ST7735_BLACK, ST7735_BLACK, 1);
+      display.drawChar(8 + GRID_OFFSET_X + 3 * (BLOCK_SIZE + GRID_GAP), ty, 'd',
+                       ST7735_BLACK, ST7735_BLACK, 1);
+    }
   }
   void handleButtons(uint32_t held, uint32_t released) {
     bool ab_mode = held & PAD_A && held & PAD_B;
@@ -251,9 +292,89 @@ public:
     bool b_mode = !ab_mode && held & PAD_B;
     bool none_mode = !ab_mode && !a_mode && !b_mode;
     switch (mode) {
+    case menu_mode::menu1:
+      if (none_mode) {
+        if (released & PAD_RIGHT) {
+          selectedMenu1Control = wrapping_add(selectedMenu1Control, 3);
+        }
+        if (released & PAD_LEFT) {
+          selectedMenu1Control = wrapping_sub(selectedMenu1Control, 3);
+        }
+        if (released & PAD_DOWN) {
+          waveDown();
+          display.fillScreen(ST7735_WHITE);
+        }
+        if (released & PAD_UP) {
+          waveUp();
+          display.fillScreen(ST7735_WHITE);
+        }
+        if (released == PAD_SELECT) {
+          mode = menu_mode::menu2;
+          display.fillScreen(ST7735_WHITE);
+        }
+        if (released == PAD_B) {
+          mode = menu_mode::live;
+          display.fillScreen(ST7735_WHITE);
+        }
+      }
+      // TODO make this an enum wtf lol
+      if (selectedMenu1Control == 0) {
+        auto max = 140.0;
+        auto change = 10.0;
+        if (b_mode) {
+          if (released & PAD_LEFT) {
+            // TODO `SoundBlock * selectedBlock()`
+            auto attack = selectedWave()->sounds[selectedBlockIndex].attack;
+            selectedWave()->sounds[selectedBlockIndex].attack =
+                attack > change ? attack - change : 0;
+          }
+          if (released & PAD_RIGHT) {
+            auto attack = selectedWave()->sounds[selectedBlockIndex].attack;
+            selectedWave()->sounds[selectedBlockIndex].attack =
+                attack < max ? attack + change : max;
+          }
+        }
+        if (a_mode) {
+          if (released & PAD_RIGHT) {
+            auto decay = selectedWave()->sounds[selectedBlockIndex].decay;
+            selectedWave()->sounds[selectedBlockIndex].decay =
+                decay > change ? decay - change : 0;
+          }
+          if (released & PAD_LEFT) {
+            auto decay = selectedWave()->sounds[selectedBlockIndex].decay;
+            selectedWave()->sounds[selectedBlockIndex].decay =
+                decay < max ? decay + change : max;
+          }
+        }
+      }
+      return;
+    case menu_mode::menu2:
+      if (none_mode) {
+        if (released & PAD_DOWN) {
+          waveDown();
+        }
+        if (released & PAD_UP) {
+          waveUp();
+        }
+        if (released & PAD_RIGHT) {
+          selectedMenu2Control = wrapping_add(selectedMenu2Control, 3);
+        }
+        if (released & PAD_LEFT) {
+          selectedMenu2Control = wrapping_sub(selectedMenu2Control, 3);
+        }
+        if (released == PAD_SELECT) {
+          mode = menu_mode::menu1;
+        }
+        if (released == PAD_B) {
+          mode = menu_mode::live;
+          // TODO draw a white rectangle
+          // clearMenu()
+        }
+      }
+      return;
     case menu_mode::live:
       if (b_mode) {
-        auto sound = &selectedWave.sounds[selectedBlockIndex];
+        auto sound = &selectedWave()->sounds[selectedBlockIndex];
         if (released & PAD_UP) {
           sound->noteUp();
         }
@@ -287,15 +408,21 @@ public:
         }
 
         if (released == PAD_B) {
-          selectedWave.sounds[selectedBlockIndex].activate(lastNote, lastOctave);
+          selectedWave()->sounds[selectedBlockIndex].activate(lastNote,
+                                                              lastOctave);
         } else if (released == PAD_A) {
-          auto sound = &selectedWave.sounds[selectedBlockIndex];
+          auto sound = &selectedWave()->sounds[selectedBlockIndex];
           if (sound->active) {
+            // TODO this can be done by assigning it to a variable w/o using &
             clipboard = sound->cut();
             hasClipboard = true;
           } else if (hasClipboard) {
-            selectedWave.sounds[selectedBlockIndex] = clipboard;
+            selectedWave()->sounds[selectedBlockIndex] = clipboard;
           }
+        }
+
+        if (released == PAD_SELECT) {
+          mode = menu_mode::menu1;
         }
       }
       return;
@@ -317,12 +444,7 @@ AudioConnection wen_patch(synth_n, env_n);
  * - chords
  * - panning
  * - each instrument should perhaps have its own mixer?
-
-AudioMixer4 q_mixer;
-AudioMixer4 p_mixer;
-AudioMixer4 s_mixer;
-AudioMixer4 n_mixer;
-*/
+ */
 
 AudioMixer4 mixer;
 
