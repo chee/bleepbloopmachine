@@ -129,7 +129,10 @@ Point getCoord(int idx) {
   };
 }
 
-    class SoundBlock {
+#define MAX_ATTACK 400.0
+#define MAX_DECAY 400.0
+
+class SoundBlock {
 public:
   int note = 0;
   int octave = 3;
@@ -154,14 +157,14 @@ public:
   void noteDown() { note = wrapping_sub(note, 11); }
   void octaveUp() { octave = wrapping_add(octave, 8); }
   void octaveDown() { octave = wrapping_sub(octave, 8); }
-  void decayUp() { decay = saturating_add(decay, 400.0, 20.0, 0); }
-  void decayDown() { decay = saturating_sub(decay, 400.0, 20.0, 0); }
+  void decayUp() { decay = saturating_add(decay, MAX_DECAY, 20.0, 0); }
+  void decayDown() { decay = saturating_sub(decay, MAX_DECAY, 20.0, 0); }
   void ampUp() { amp = saturating_add(amp, 1.0, 0.1, 0); }
   void ampDown() { amp = saturating_sub(amp, 1.0, 0.1, 0); }
   void panLeft() { pan = saturating_sub(pan, 1.0); }
   void panRight() { pan = saturating_add(pan, 1.0); }
-  void attackUp() { attack = saturating_add(attack, 400.0, 20.0, 0); }
-  void attackDown() { attack = saturating_sub(attack, 400.0, 20.0, 0); }
+  void attackUp() { attack = saturating_add(attack, MAX_ATTACK, 20.0, 0); }
+  void attackDown() { attack = saturating_sub(attack, MAX_ATTACK, 20.0, 0); }
   void sustainUp() { sustain = saturating_add(sustain, 1.0, 0.137, 0); }
   void sustainDown() { sustain = saturating_sub(sustain, 1.0, 0.137, 0); }
   SoundBlock cut() {
@@ -286,6 +289,26 @@ public:
           // draw panning
           auto panX = ((BLOCK_SIZE / 2) * sound->pan) + BLOCK_SIZE / 2;
           display->fillRect(point.x + panX, point.y + BLOCK_SIZE - 2, 2, 2,
+                            ST7735_CYAN);
+
+          // draw attack/decay/sustain
+          auto envColor = ST7735_GREEN;
+          float attackX = ((float)BLOCK_SIZE / 2 / MAX_ATTACK) * sound->attack;
+          float decayW = ((float)BLOCK_SIZE / 2 / MAX_DECAY) * sound->decay;
+          /// attack/sus
+          display->drawLine(
+              point.x, point.y + BLOCK_SIZE, point.x + attackX,
+              (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->sustain, envColor);
+          /// decay/sus
+          display->drawLine(
+              point.x + attackX,
+              (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->sustain,
+              point.x + attackX + decayW, (point.y + BLOCK_SIZE), envColor);
+
+          // draw amp
+          auto ampY = BLOCK_SIZE * sound->amp;
+          display->fillRect(point.x + BLOCK_SIZE - 4,
+                            point.y + (BLOCK_SIZE - ampY), 4, ampY,
                             ST7735_CYAN);
         }
       } else if (mode == MenuMode::menu2) {
@@ -489,10 +512,10 @@ public:
         }
         if (a_mode) {
           if (released & PAD_RIGHT) {
-            sound->decayDown();
+            sound->decayUp();
           }
           if (released & PAD_LEFT) {
-            sound->decayUp();
+            sound->decayDown();
           }
         }
         if (ab_mode) {
