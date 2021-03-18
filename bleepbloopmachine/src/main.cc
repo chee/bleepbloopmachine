@@ -134,6 +134,7 @@ Point getCoord(int idx) {
 
 class SoundBlock {
 public:
+  enum Filter { low };
   int note = 0;
   int octave = 3;
   bool active = false;
@@ -143,7 +144,10 @@ public:
   float pan = 0.0;
   float amp = 1.0;
   float sustain = 0.4;
-  Waveform waveform;
+  float filterType = Filter::low;
+  float filterQ = 0.618;
+  float filterFreq = 8000.0;
+  int filterStage = 0;
   float frequency() { return freq[note][octave]; }
   void activate(int n, int o) {
     note = n;
@@ -151,9 +155,17 @@ public:
     active = true;
   }
   void activate() { active = true; }
-  void noteUp() {
-    note = wrapping_add(note, 11);
+  void filterDown() {
+    filterFreq = saturating_sub(filterFreq, 10000.0, 100.0, 40.0);
   }
+  void filterUp() {
+    filterFreq = saturating_add(filterFreq, 10000.0, 100.0, 40.0);
+  }
+  void filterQDown() {
+    filterFreq = saturating_sub(filterFreq, 1.0, 0.0234, 0);
+  }
+  void filterQUp() { filterFreq = saturating_add(filterFreq, 1.0, 0.0234, 0); }
+  void noteUp() { note = wrapping_add(note, 11); }
   void noteDown() { note = wrapping_sub(note, 11); }
   void octaveUp() { octave = wrapping_add(octave, 8); }
   void octaveDown() { octave = wrapping_sub(octave, 8); }
@@ -179,6 +191,9 @@ public:
     s.amp = amp;
     s.pan = pan;
     s.sustain = sustain;
+    s.filterFreq = filterFreq;
+    s.filterQ = filterQ;
+    s.filterType = filterType;
     return s;
   }
   SoundBlock() {}
@@ -249,6 +264,10 @@ public:
     envR.sustain(sound->sustain);
     mixerL.gain(0, sound->amp / 2);
     mixerR.gain(0, sound->amp / 2);
+    if (sound->filterType == SoundBlock::Filter::low) {
+      filterL.setLowpass(sound->filterStage, sound->filterFreq, sound->filterQ);
+      filterR.setLowpass(sound->filterStage, sound->filterFreq, sound->filterQ);
+    }
     if (sound->pan < 0) {
       mixerL.gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
       mixerR.gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
@@ -534,6 +553,21 @@ public:
           }
           if (released & PAD_DOWN) {
             sound->ampDown();
+          }
+        }
+      } else if (selectedMenu1Control == Menu1Selection::filter) {
+        if (b_mode) {
+          if (released & PAD_LEFT) {
+            sound->filterDown();
+          }
+          if (released & PAD_RIGHT) {
+            sound->filterUp();
+          }
+          if (released & PAD_UP) {
+            sound->filterQUp();
+          }
+          if (released & PAD_DOWN) {
+            sound->filterQDown();
           }
         }
       }
