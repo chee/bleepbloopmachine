@@ -142,7 +142,7 @@ public:
   float delay = 0.0;
   float pan = 0.0;
   float amp = 1.0;
-  float sustain = 0.9;
+  float sustain = 0.4;
   Waveform waveform;
   float frequency() { return freq[note][octave]; }
   void activate(int n, int o) {
@@ -291,24 +291,28 @@ public:
           display->fillRect(point.x + panX, point.y + BLOCK_SIZE - 2, 2, 2,
                             ST7735_CYAN);
 
-          // draw attack/decay/sustain
+          // draw attack/decay/amp
+          /// perhaps unexpected is that amplitude is represented by the height
+          /// of the envelope, sustain being the bar on the right
+
           auto envColor = ST7735_GREEN;
           float attackX = ((float)BLOCK_SIZE / 2 / MAX_ATTACK) * sound->attack;
           float decayW = ((float)BLOCK_SIZE / 2 / MAX_DECAY) * sound->decay;
-          /// attack/sus
-          display->drawLine(
-              point.x, point.y + BLOCK_SIZE, point.x + attackX,
-              (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->sustain, envColor);
-          /// decay/sus
-          display->drawLine(
-              point.x + attackX,
-              (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->sustain,
-              point.x + attackX + decayW, (point.y + BLOCK_SIZE), envColor);
 
-          // draw amp
-          auto ampY = BLOCK_SIZE * sound->amp;
+          /// attack/amp
+          display->drawLine(point.x, point.y + BLOCK_SIZE, point.x + attackX,
+                            (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->amp,
+                            envColor);
+          /// decay/amp
+          display->drawLine(point.x + attackX,
+                            (point.y + BLOCK_SIZE) - BLOCK_SIZE * sound->amp,
+                            point.x + attackX + decayW, (point.y + BLOCK_SIZE),
+                            envColor);
+
+          // draw sustain
+          auto susY = BLOCK_SIZE * sound->sustain;
           display->fillRect(point.x + BLOCK_SIZE - 4,
-                            point.y + (BLOCK_SIZE - ampY), 4, ampY,
+                            point.y + (BLOCK_SIZE - susY), 4, susY,
                             ST7735_CYAN);
         }
       } else if (mode == MenuMode::menu2) {
