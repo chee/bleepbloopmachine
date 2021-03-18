@@ -446,6 +446,7 @@ public:
     bool b_mode = !ab_mode && held & PAD_B;
     bool start_mode = !ab_mode && !a_mode && !b_mode && held & PAD_START;
     bool none_mode = !ab_mode && !a_mode && !b_mode && !start_mode;
+    auto sound = &selectedWave()->sounds[selectedBlockIndex];
 
     if (b_mode && released) {
       ignoreRelease |= PAD_B;
@@ -499,7 +500,6 @@ public:
         }
       }
       if (selectedMenu1Control == Menu1Selection::env) {
-        auto sound = &selectedWave()->sounds[selectedBlockIndex];
         if (b_mode) {
           if (released & PAD_LEFT) {
             sound->attackDown();
@@ -579,7 +579,7 @@ public:
       break;
     case MenuMode::live:
       if (b_mode) {
-        auto sound = &selectedWave()->sounds[selectedBlockIndex];
+
         if (released & PAD_UP) {
           sound->noteUp();
         }
@@ -609,10 +609,8 @@ public:
         }
 
         if (released == PAD_B) {
-          selectedWave()->sounds[selectedBlockIndex].activate(lastNote,
-                                                              lastOctave);
+          sound->activate(lastNote, lastOctave);
         } else if (released == PAD_A) {
-          auto sound = &selectedWave()->sounds[selectedBlockIndex];
           if (sound->active) {
             // TODO this can be done by assigning it to a variable w/o using &
             clipboard = sound->cut();
