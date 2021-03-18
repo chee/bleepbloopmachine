@@ -440,8 +440,8 @@ public:
     bool ab_mode = held & PAD_A && held & PAD_B;
     bool a_mode = !ab_mode && held & PAD_A;
     bool b_mode = !ab_mode && held & PAD_B;
-    bool select_mode = !ab_mode && !a_mode && !b_mode && held & PAD_SELECT;
-    bool none_mode = !ab_mode && !a_mode && !b_mode && !select_mode;
+    bool start_mode = !ab_mode && !a_mode && !b_mode && held & PAD_START;
+    bool none_mode = !ab_mode && !a_mode && !b_mode && !start_mode;
 
     if (b_mode && released) {
       ignoreRelease |= PAD_B;
@@ -451,13 +451,13 @@ public:
       ignoreRelease |= PAD_A;
     }
 
-    if (select_mode && released) {
-      ignoreRelease |= PAD_SELECT;
+    if (start_mode && released) {
+      ignoreRelease |= PAD_START;
     }
 
     switch (mode) {
     case MenuMode::menu1:
-      if (select_mode) {
+      if (start_mode) {
         if (released & PAD_UP && selectedBlockIndex > 0x3) {
           selectedBlockIndex -= 4;
         }
@@ -483,8 +483,8 @@ public:
         if (released & PAD_UP) {
           waveUp();
         }
-        if (released == PAD_SELECT) {
-          if (!(ignoreRelease & PAD_SELECT)) {
+        if (released == PAD_START) {
+          if (!(ignoreRelease & PAD_START)) {
             menu(MenuMode::menu2);
           }
         }
@@ -535,7 +535,7 @@ public:
       }
       break;
     case MenuMode::menu2:
-      if (select_mode) {
+      if (start_mode) {
         if (released & PAD_UP && selectedBlockIndex > 0x3) {
           selectedBlockIndex -= 4;
         }
@@ -561,8 +561,8 @@ public:
         if (released & PAD_LEFT) {
           selectedMenu2Control = --selectedMenu2Control;
         }
-        if (released == PAD_SELECT) {
-          if (!(ignoreRelease & PAD_SELECT)) {
+        if (released == PAD_START) {
+          if (!(ignoreRelease & PAD_START)) {
             menu(MenuMode::menu1);
           }
         }
@@ -617,8 +617,8 @@ public:
             selectedWave()->sounds[selectedBlockIndex] = clipboard;
           }
         }
-        if (released == PAD_SELECT) {
-          if (!(ignoreRelease & PAD_SELECT)) {
+        if (released == PAD_START) {
+          if (!(ignoreRelease & PAD_START)) {
             menu(MenuMode::menu1);
           }
         }
@@ -631,8 +631,8 @@ public:
     if (released == PAD_A && ignoreRelease & PAD_A) {
       ignoreRelease ^= PAD_A;
     }
-    if (released == PAD_SELECT && ignoreRelease & PAD_SELECT) {
-      ignoreRelease ^= PAD_SELECT;
+    if (released == PAD_START && ignoreRelease & PAD_START) {
+      ignoreRelease ^= PAD_START;
     }
   }
 };
