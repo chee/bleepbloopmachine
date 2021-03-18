@@ -1,4 +1,0 @@
-{
-	"stubPath": "./stubs",
-	"include": ["./code/*", "./code/lib/*"]
-}
