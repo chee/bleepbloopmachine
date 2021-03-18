@@ -143,7 +143,7 @@ public:
   float delay = 0.0;
   float pan = 0.0;
   float amp = 1.0;
-  float sustain = 0.4;
+  float sustain = 0.0;
   float filterType = Filter::low;
   float filterQ = 0.618;
   float filterFreq = 8000.0;
@@ -218,8 +218,28 @@ public:
   AudioFilterBiquad filterR = AudioFilterBiquad();
   AudioMixer4 mixerL = AudioMixer4();
   AudioMixer4 mixerR = AudioMixer4();
-  int rate = 4;
+  int bpmDivider = 1;
   int lastStepBlockIndex = 0;
+  void bpmDividerUp() {
+    switch (bpmDivider) {
+    case 4:
+      bpmDivider = 2;
+      break;
+    case 2:
+      bpmDivider = 1;
+      break;
+    }
+  }
+  void bpmDividerDown() {
+    switch (bpmDivider) {
+    case 2:
+      bpmDivider = 4;
+      break;
+    case 1:
+      bpmDivider = 2;
+      break;
+    }
+  }
   Wave(unsigned char n, Waveform f, int mixerIndex) : name{n}, form{f} {
     // memory leaks
     new AudioConnection(synthL, envL);
@@ -237,8 +257,8 @@ public:
     filterR.setLowpass(0, 8000);
     synthL.begin((int)form);
     synthR.begin((int)form);
-    synthL.amplitude(0.5);
-    synthR.amplitude(0.5);
+    synthL.amplitude(1.0);
+    synthR.amplitude(1.0);
     envL.sustain(0.0);
     envR.sustain(0.0);
     if (form == Waveform::pulse) {
@@ -246,7 +266,7 @@ public:
       synthR.pulseWidth(0.5);
     }
   }
-  int stepBlockIndex(int currentStep) { return currentStep / rate % 16; }
+  int stepBlockIndex(int currentStep) { return currentStep / bpmDivider % 16; }
   void play(int blockIndex) {
     auto sound = &sounds[blockIndex];
     if (!sound->active) {
@@ -347,6 +367,7 @@ Wave wave_p('p', Waveform::pulse, 1);
 Wave wave_s('s', Waveform::sawtooth, 2);
 Wave wave_n('n', Waveform::sampleHold, 3);
 Wave *waves[4] = {&wave_q, &wave_p, &wave_s, &wave_n};
+Adafruit_NeoPixel neopixels(NEOPIXEL_LENGTH, NEOPIXEL_PIN, NEO_GRB);
 
 class BleepBloopMachine {
 public:
@@ -354,7 +375,7 @@ public:
   float bpm = 120.0;
   long lastMicros = micros();
   // TODO ask abe how to write this without brackets
-  long stepLength() { return ((1 / bpm) / 16) * 60000000; }
+  long stepLength() { return ((1 / bpm) / 4) * 60000000; }
   int selectedSoundIndex = 0;
   Menu1Selection selectedMenu1Control{0};
   Menu2Selection selectedMenu2Control{0};
@@ -380,6 +401,12 @@ public:
       wave_s.step(currentStep);
       wave_n.step(currentStep);
       updateDisplay();
+      for (auto i = 0; i < 4; i++) {
+        int bar = (int)(currentStep / 16);
+        neopixels.setPixelColor(i, i == bar ? neopixels.Color(100, 20, 30)
+                                            : neopixels.Color(0, 0, 200));
+      }
+      neopixels.show();
     }
   }
   Wave *selectedWave() { return waves[selectedWaveIndex]; }
@@ -443,8 +470,14 @@ public:
                      ST7735_BLACK, 1);
     display.drawChar(DISPLAY_WIDTH - 15, 10, bpmString[1], ST7735_BLACK,
                      ST7735_BLACK, 1);
-    if (bpmString.length() > 2) {
-      display.drawChar(DISPLAY_WIDTH - 10, 10, bpmString[2], ST7735_BLACK,
+    display.drawChar(DISPLAY_WIDTH - 10, 10, bpmString[2], ST7735_BLACK,
+                       ST7735_BLACK, 1);
+
+    if (selectedWave()->bpmDivider != 1) {
+      display.drawChar(DISPLAY_WIDTH - 15, 20, '/', ST7735_BLACK, ST7735_BLACK,
+                       1);
+      display.drawChar(DISPLAY_WIDTH - 10, 20,
+                       String(selectedWave()->bpmDivider)[0], ST7735_BLACK,
                        ST7735_BLACK, 1);
     }
 
@@ -459,7 +492,7 @@ public:
     mode = m;
     display.fillScreen(ST7735_WHITE);
   }
-  void handleButtons(uint32_t held, uint32_t released) {
+  void handleButtons(uint32_t held, uint32_t released, float joyX, float joyY) {
     bool ab_mode = held & PAD_A && held & PAD_B;
     bool a_mode = !ab_mode && held & PAD_A;
     bool b_mode = !ab_mode && held & PAD_B;
@@ -540,6 +573,12 @@ public:
           if (released & PAD_LEFT) {
             sound->decayDown();
           }
+          if (released & PAD_UP) {
+            sound->sustainUp();
+          }
+          if (released & PAD_DOWN) {
+            sound->sustainDown();
+          }
         }
         if (ab_mode) {
           if (released & PAD_LEFT) {
@@ -568,6 +607,12 @@ public:
           }
           if (released & PAD_DOWN) {
             sound->filterQDown();
+          }
+        } else if (ab_mode) {
+          for (auto i = 0; i <= 0xf; i++) {
+            selectedWave()->sounds[i].filterFreq =
+                8000.0 * ((joyX + 512) / 1024);
+            selectedWave()->sounds[i].filterQ = (joyY + 512) / 1024;
           }
         }
       }
@@ -607,6 +652,26 @@ public:
         if (released == PAD_B) {
           if (!(ignoreRelease & PAD_B)) {
             menu(MenuMode::live);
+          }
+        }
+      }
+      if (selectedMenu2Control == Menu2Selection::bpm) {
+        if (b_mode) {
+          if (released & PAD_LEFT) {
+            bpm = saturating_sub(bpm, 240.0, 20.0, 40.0);
+            display.fillScreen(ST7735_WHITE);
+          }
+          if (released & PAD_RIGHT) {
+            bpm = saturating_add(bpm, 240.0, 20.0, 40.0);
+            display.fillScreen(ST7735_WHITE);
+          }
+          if (released & PAD_DOWN) {
+            selectedWave()->bpmDividerDown();
+            display.fillScreen(ST7735_WHITE);
+          }
+          if (released & PAD_UP) {
+            selectedWave()->bpmDividerUp();
+            display.fillScreen(ST7735_WHITE);
           }
         }
       }
@@ -658,8 +723,18 @@ public:
             menu(MenuMode::menu1);
           }
         }
+      } else if (start_mode) {
+        if (released == PAD_DOWN) {
+          waveDown();
+        } else if (released == PAD_UP) {
+          waveUp();
+        } else if (released == PAD_LEFT) {
+          // chainLeft();
+        } else if (released == PAD_RIGHT) {
+          // chainRight();
+        }
+        break;
       }
-      break;
     }
     if (released == PAD_B && ignoreRelease & PAD_B) {
       ignoreRelease ^= PAD_B;
@@ -671,11 +746,9 @@ public:
       ignoreRelease ^= PAD_START;
     }
   }
-};
+  };
 
 BleepBloopMachine machine;
-
-Adafruit_NeoPixel neopixels(NEOPIXEL_LENGTH, NEOPIXEL_PIN, NEO_GRB);
 
 uint16_t readLightSensor() { return analogRead(LIGHT_SENSOR); }
 
@@ -695,14 +768,17 @@ void setup() {
   digitalWrite(DISPLAY_BACKLIGHT, HIGH);
   display.fillScreen(ST77XX_WHITE);
   neopixels.begin();
-  neopixels.setBrightness(180);
+  neopixels.setBrightness(10);
+  neopixels.fill(ST7735_CYAN, 0, 4);
+  neopixels.show();
 }
 
 void loop() {
   uint32_t buttons = controls.readButtons();
-
   uint32_t justReleased = controls.justReleased();
+  float joyX = controls.readJoystickX();
+  float joyY = controls.readJoystickY();
 
-  machine.handleButtons(buttons, justReleased);
+  machine.handleButtons(buttons, justReleased, joyX, joyX);
   machine.step();
 }
