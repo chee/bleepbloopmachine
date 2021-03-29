@@ -294,15 +294,14 @@ public:
     }
   }
   Wave(unsigned char n, Waveform f, int mixerIndex) : name{n}, form{f} {
-    // memory leaks
-    new AudioConnection(synthL, envL);
-    new AudioConnection(envL, filterL);
-    new AudioConnection(filterL, 0, mixerL, 0);
-    new AudioConnection(synthR, envR);
-    new AudioConnection(envR, filterR);
-    new AudioConnection(filterR, 0, mixerR, 0);
-    new AudioConnection(mixerL, 0, mainmixerL, mixerIndex);
-    new AudioConnection(mixerR, 0, mainmixerR, mixerIndex);
+    patches[0] = new AudioConnection(synthL, envL);
+    patches[1] = new AudioConnection(envL, filterL);
+    patches[2] = new AudioConnection(filterL, 0, mixerL, 0);
+    patches[3] = new AudioConnection(synthR, envR);
+    patches[4] = new AudioConnection(envR, filterR);
+    patches[5] = new AudioConnection(filterR, 0, mixerR, 0);
+    patches[6] = new AudioConnection(mixerL, 0, mainmixerL, mixerIndex);
+    patches[7] = new AudioConnection(mixerR, 0, mainmixerR, mixerIndex);
     for (auto i = 0; i < 16; i++) {
       sounds[i] = SoundBlock();
     }
@@ -319,6 +318,7 @@ public:
       synthR.pulseWidth(0.5);
     }
   }
+  ~Wave() { delete[] patches; }
   int stepBlockIndex(int currentStep) { return currentStep / bpmDivider % 16; }
   void play(int blockIndex) {
     auto sound = &sounds[blockIndex];
