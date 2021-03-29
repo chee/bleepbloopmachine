@@ -148,6 +148,8 @@ public:
   float filterQ = 0.618;
   float filterFreq = 8000.0;
   int filterStage = 0;
+  float pitchbend = 1.0;
+  float pitchbendSpeed = 0.0025;
   float frequency() { return freq[note][octave]; }
   void activate(int n, int o) {
     note = n;
@@ -155,6 +157,16 @@ public:
     active = true;
   }
   void activate() { active = true; }
+  void pitchbendUp() { pitchbend = saturating_sub(pitchbend, 10.0, 0.1, 0); }
+  void pitchbendDown() {
+    pitchbend = saturating_add(pitchbend, 10.0, 0.1, 0.0);
+  }
+  void pitchbendSpeedUp() {
+    pitchbendSpeed = saturating_sub(pitchbendSpeed, 0.1, 0.0025, 0.0025);
+  }
+  void pitchbendSpeedDown() {
+    pitchbendSpeed = saturating_add(pitchbendSpeed, 0.1, 0.0025, 0.0025);
+  }
   void filterDown() {
     filterFreq = saturating_sub(filterFreq, 10000.0, 100.0, 40.0);
   }
@@ -194,6 +206,8 @@ public:
     s.filterFreq = filterFreq;
     s.filterQ = filterQ;
     s.filterType = filterType;
+    s.pitchbendSpeed = pitchbendSpeed;
+    s.pitchbend = pitchbend;
     return s;
   }
   SoundBlock() {}
@@ -206,7 +220,44 @@ AudioConnection left_ear_patch(mainmixerL, 0, headphones, 0);
 AudioConnection right_ear_patch(mainmixerR, 0, headphones, 1);
 
 class Wave {
+  enum PitchbendState { idle, inc, dec };
+  PitchbendState pitchbendState = PitchbendState::idle;
+  float pitchbendSpeed = 0.1;
+  float pitchbend = 1.0;
+  float prebendFreq = 0.0;
+  void pitchbendStart() {
+    if (pitchbend > 1.0) {
+      pitchbendState = PitchbendState::dec;
+    } else if (pitchbend < 1.0) {
+      pitchbendState = PitchbendState::inc;
+    } else {
+      pitchbendState = PitchbendState::idle;
+    }
+    synthL.frequency(prebendFreq * pitchbend);
+    synthR.frequency(prebendFreq * pitchbend);
+  }
+  AudioConnection *patches[7];
+
 public:
+  void pitchbendUpdate() {
+    if (pitchbendState == PitchbendState::idle) {
+      return;
+    }
+    if (pitchbendState == PitchbendState::dec) {
+      pitchbend -= pitchbendSpeed;
+      if (pitchbend <= 1.0) {
+        pitchbendState = PitchbendState::idle;
+      }
+    }
+    if (pitchbendState == PitchbendState::inc) {
+      pitchbend += pitchbendSpeed;
+      if (pitchbend >= 1.0) {
+        pitchbendState = PitchbendState::idle;
+      }
+    }
+    synthL.frequency(prebendFreq * pitchbend);
+    synthR.frequency(prebendFreq * pitchbend);
+  }
   Waveform form;
   unsigned char name;
   SoundBlock sounds[16];
@@ -272,8 +323,9 @@ public:
     if (!sound->active) {
       return;
     }
-    synthL.frequency(sound->frequency());
-    synthR.frequency(sound->frequency());
+    prebendFreq = sound->frequency();
+    synthL.frequency(prebendFreq);
+    synthR.frequency(prebendFreq);
     envL.attack(sound->attack);
     envL.decay(sound->decay);
     envL.delay(sound->delay);
@@ -295,6 +347,9 @@ public:
       mixerR.gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
       mixerL.gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
     }
+    pitchbendSpeed = sound->pitchbendSpeed;
+    pitchbend = sound->pitchbend;
+    pitchbendStart();
     envL.noteOn();
     envR.noteOn();
   }
@@ -408,6 +463,10 @@ public:
       }
       neopixels.show();
     }
+    wave_q.pitchbendUpdate();
+    wave_p.pitchbendUpdate();
+    wave_s.pitchbendUpdate();
+    wave_n.pitchbendUpdate();
   }
   Wave *selectedWave() { return waves[selectedWaveIndex]; }
   void waveUp() {
@@ -613,6 +672,36 @@ public:
             selectedWave()->sounds[i].filterFreq =
                 8000.0 * ((joyX + 512) / 1024);
             selectedWave()->sounds[i].filterQ = (joyY + 512) / 1024;
+          }
+        }
+      } else if (selectedMenu1Control == Menu1Selection::mod) {
+        if (b_mode) {
+          if (released & PAD_LEFT) {
+            sound->pitchbendSpeedUp();
+          }
+          if (released & PAD_RIGHT) {
+            sound->pitchbendSpeedDown();
+          }
+          if (released & PAD_UP) {
+            sound->pitchbendUp();
+          }
+          if (released & PAD_DOWN) {
+            sound->pitchbendDown();
+          }
+        }
+      } else if (selectedMenu1Control == Menu1Selection::delay) {
+        if (b_mode) {
+          if (released & PAD_LEFT) {
+            // sound->delayUp();
+          }
+          if (released & PAD_RIGHT) {
+            //  sound->pitchbendSpeedUp();
+          }
+          if (released & PAD_UP) {
+            sound->delayUp();
+          }
+          if (released & PAD_DOWN) {
+            sound->delayDown();
           }
         }
       }
