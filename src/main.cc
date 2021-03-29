@@ -183,6 +183,8 @@ public:
   void octaveDown() { octave = wrapping_sub(octave, 8); }
   void decayUp() { decay = saturating_add(decay, MAX_DECAY, 20.0, 0); }
   void decayDown() { decay = saturating_sub(decay, MAX_DECAY, 20.0, 0); }
+  void delayUp() { delay = saturating_add(delay, 100.0, 10.0, 0); }
+  void delayDown() { delay = saturating_sub(delay, 100.0, 10.0, 0); }
   void ampUp() { amp = saturating_add(amp, 1.0, 0.1, 0); }
   void ampDown() { amp = saturating_sub(amp, 1.0, 0.1, 0); }
   void panLeft() { pan = saturating_sub(pan, 1.0); }
