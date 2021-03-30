@@ -49,6 +49,15 @@ enum class Waveform {
   sampleHold
 };
 
+#define KEYLAYER_0 0
+#define KEYLAYER_1 1
+#define KEYLAYER_2 2
+#define KEYLAYER_3 3
+#define KEYLAYER_4 4
+#define KEYLAYER_5 5
+
+enum class Keymod { a, b, ab, select, start, none };
+
 int wrapping_add(int cur, int max, int inc = 1, int min = 0) {
   auto nxt = cur + inc;
   return nxt <= max ? nxt : min;
@@ -84,24 +93,24 @@ float saturating_sub(float cur, float max = 1.0, float inc = 0.1,
 
 enum class MenuMode { live, menu1, menu2 };
 
-enum class Menu1Selection { env, mod, filter, delay };
+enum class Menu1Control { env, mod, filter, delay };
 
-Menu1Selection &operator++(Menu1Selection &s) {
-  return s = Menu1Selection{wrapping_add((int)s, 3)};
+Menu1Control &operator++(Menu1Control &s) {
+  return s = Menu1Control{wrapping_add((int)s, 3)};
 }
 
-Menu1Selection &operator--(Menu1Selection &s) {
-  return s = Menu1Selection{wrapping_sub((int)s, 3)};
+Menu1Control &operator--(Menu1Control &s) {
+  return s = Menu1Control{wrapping_sub((int)s, 3)};
 }
 
-enum class Menu2Selection { bpm, chain, wave, file };
+enum class Menu2Control { bpm, chain, wave, file };
 
-Menu2Selection &operator++(Menu2Selection &s) {
-  return s = Menu2Selection{wrapping_add((int)s, 3)};
+Menu2Control &operator++(Menu2Control &s) {
+  return s = Menu2Control{wrapping_add((int)s, 3)};
 }
 
-Menu2Selection &operator--(Menu2Selection &s) {
-  return s = Menu2Selection{wrapping_sub((int)s, 3)};
+Menu2Control &operator--(Menu2Control &s) {
+  return s = Menu2Control{wrapping_sub((int)s, 3)};
 }
 
 String note_names[] = {"c",  "c#", "d",  "d#", "e",  "f",
@@ -132,7 +141,9 @@ Point getCoord(int idx) {
 #define MAX_ATTACK 400.0
 #define MAX_DECAY 400.0
 
-class SoundBlock {
+class Block {};
+
+class SoundBlock : public Block {
 public:
   enum Filter { low };
   int note = 0;
@@ -150,6 +161,7 @@ public:
   int filterStage = 0;
   float pitchbend = 1.0;
   float pitchbendSpeed = 0.0025;
+  float pulseWidth = 0.5;
   float frequency() { return freq[note][octave]; }
   void activate(int n, int o) {
     note = n;
@@ -187,6 +199,10 @@ public:
   void delayDown() { delay = saturating_sub(delay, 100.0, 10.0, 0); }
   void ampUp() { amp = saturating_add(amp, 1.0, 0.1, 0); }
   void ampDown() { amp = saturating_sub(amp, 1.0, 0.1, 0); }
+  void pulseWidthUp() { pulseWidth = saturating_add(pulseWidth, 1.0, 0.1, 0); }
+  void pulseWidthDown() {
+    pulseWidth = saturating_sub(pulseWidth, 1.0, 0.1, 0);
+  }
   void panLeft() { pan = saturating_sub(pan, 1.0); }
   void panRight() { pan = saturating_add(pan, 1.0); }
   void attackUp() { attack = saturating_add(attack, MAX_ATTACK, 20.0, 0); }
@@ -210,10 +226,14 @@ public:
     s.filterType = filterType;
     s.pitchbendSpeed = pitchbendSpeed;
     s.pitchbend = pitchbend;
+    s.pulseWidth = pulseWidth;
     return s;
   }
   SoundBlock() {}
 };
+
+SoundBlock clipboard;
+bool hasClipboard = false;
 
 AudioMixer4 mainmixerL;
 AudioMixer4 mainmixerR;
@@ -221,7 +241,47 @@ AudioOutputAnalogStereo headphones;
 AudioConnection left_ear_patch(mainmixerL, 0, headphones, 0);
 AudioConnection right_ear_patch(mainmixerR, 0, headphones, 1);
 
-class Wave {
+class Track {
+protected:
+  int lastStepBlockIndex = 0;
+
+public:
+  int bpmDivider = 1;
+  unsigned char name;
+  Block blocks[16];
+  int stepBlockIndex(int currentStep) { return currentStep / bpmDivider % 16; }
+  void bpmDividerUp() {
+    switch (bpmDivider) {
+    case 4:
+      bpmDivider = 2;
+      break;
+    case 2:
+      bpmDivider = 1;
+      break;
+    }
+  }
+  void bpmDividerDown() {
+    switch (bpmDivider) {
+    case 2:
+      bpmDivider = 4;
+      break;
+    case 1:
+      bpmDivider = 2;
+      break;
+    }
+  }
+  virtual void updateDisplay(Adafruit_GFX *display, MenuMode mode,
+                             Menu1Control menu1control,
+                             Menu2Control menu2control) = 0;
+  virtual void handle(Menu1Control control, Keymod modifier, uint32_t pressed,
+                      int blockIndex) = 0;
+  virtual void handle(Menu2Control control, Keymod modifier, uint32_t pressed,
+                      int blockIndex) = 0;
+  virtual void handle(Keymod modifier, uint32_t pressed, int blockIndex) = 0;
+  virtual void step(int currentTick) = 0;
+};
+
+class Wave : public Track {
   enum PitchbendState { idle, inc, dec };
   PitchbendState pitchbendState = PitchbendState::idle;
   float pitchbendSpeed = 0.1;
@@ -261,8 +321,6 @@ public:
     synthR.frequency(prebendFreq * pitchbend);
   }
   Waveform form;
-  unsigned char name;
-  SoundBlock sounds[16];
   AudioSynthWaveform synthL = AudioSynthWaveform();
   AudioSynthWaveform synthR = AudioSynthWaveform();
   AudioEffectEnvelope envL = AudioEffectEnvelope();
@@ -271,29 +329,9 @@ public:
   AudioFilterBiquad filterR = AudioFilterBiquad();
   AudioMixer4 mixerL = AudioMixer4();
   AudioMixer4 mixerR = AudioMixer4();
-  int bpmDivider = 1;
-  int lastStepBlockIndex = 0;
-  void bpmDividerUp() {
-    switch (bpmDivider) {
-    case 4:
-      bpmDivider = 2;
-      break;
-    case 2:
-      bpmDivider = 1;
-      break;
-    }
-  }
-  void bpmDividerDown() {
-    switch (bpmDivider) {
-    case 2:
-      bpmDivider = 4;
-      break;
-    case 1:
-      bpmDivider = 2;
-      break;
-    }
-  }
-  Wave(unsigned char n, Waveform f, int mixerIndex) : name{n}, form{f} {
+  SoundBlock blocks[16];
+  Wave(unsigned char n, Waveform f, int mixerIndex) : form{f} {
+    name = n;
     patches[0] = new AudioConnection(synthL, envL);
     patches[1] = new AudioConnection(envL, filterL);
     patches[2] = new AudioConnection(filterL, 0, mixerL, 0);
@@ -303,14 +341,14 @@ public:
     patches[6] = new AudioConnection(mixerL, 0, mainmixerL, mixerIndex);
     patches[7] = new AudioConnection(mixerR, 0, mainmixerR, mixerIndex);
     for (auto i = 0; i < 16; i++) {
-      sounds[i] = SoundBlock();
+      blocks[i] = SoundBlock();
     }
     filterL.setLowpass(0, 8000);
     filterR.setLowpass(0, 8000);
     synthL.begin((int)form);
     synthR.begin((int)form);
-    synthL.amplitude(1.0);
-    synthR.amplitude(1.0);
+    synthL.amplitude(0.5);
+    synthR.amplitude(0.5);
     envL.sustain(0.0);
     envR.sustain(0.0);
     if (form == Waveform::pulse) {
@@ -319,9 +357,8 @@ public:
     }
   }
   ~Wave() { delete[] patches; }
-  int stepBlockIndex(int currentStep) { return currentStep / bpmDivider % 16; }
   void play(int blockIndex) {
-    auto sound = &sounds[blockIndex];
+    auto sound = &blocks[blockIndex];
     if (!sound->active) {
       return;
     }
@@ -349,6 +386,10 @@ public:
       mixerR.gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
       mixerL.gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
     }
+    if (form == Waveform::pulse) {
+      synthL.pulseWidth(sound->pulseWidth);
+      synthR.pulseWidth(sound->pulseWidth);
+    }
     pitchbendSpeed = sound->pitchbendSpeed;
     pitchbend = sound->pitchbend;
     pitchbendStart();
@@ -363,9 +404,9 @@ public:
     }
   }
   void updateDisplay(Adafruit_GFX *display, MenuMode mode,
-                     Menu1Selection menu1control, Menu2Selection menu2control) {
+                     Menu1Control menu1control, Menu2Control menu2control) {
     for (int i = 0; i <= 0xf; i++) {
-      auto sound = &sounds[i];
+      auto sound = &blocks[i];
       Point point = getCoord(i);
       if (!sound->active)
         continue;
@@ -381,7 +422,7 @@ public:
       if (mode == MenuMode::live) {
         // only note name and octave
       } else if (mode == MenuMode::menu1) {
-        if (menu1control == Menu1Selection::env) {
+        if (menu1control == Menu1Control::env) {
           // draw panning
           auto panX = ((BLOCK_SIZE / 2) * sound->pan) + BLOCK_SIZE / 2;
           display->fillRect(point.x + panX, point.y + BLOCK_SIZE - 2, 2, 2,
@@ -412,18 +453,155 @@ public:
                             ST7735_CYAN);
         }
       } else if (mode == MenuMode::menu2) {
-          display->drawPixel(point.x + 5, point.y + 5, ST7735_BLACK);
+        display->drawPixel(point.x + 5, point.y + 5, ST7735_BLACK);
       }
     }
     display->drawChar(10, 10, name, ST77XX_BLACK, ST7735_BLACK, 1);
   }
+  void handle(Menu1Control control, Keymod modifier, uint32_t pressed,
+              int blockIndex) {
+    auto sound = &blocks[blockIndex];
+    if (control == Menu1Control::env) {
+      if (modifier == Keymod::a) {
+        if (pressed & PAD_RIGHT) {
+          sound->decayUp();
+        }
+        if (pressed & PAD_LEFT) {
+          sound->decayDown();
+        }
+        if (pressed & PAD_UP) {
+          sound->sustainUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->sustainDown();
+        }
+      }
+      if (modifier == Keymod::b) {
+        if (pressed & PAD_LEFT) {
+          sound->attackDown();
+        }
+        if (pressed & PAD_RIGHT) {
+          sound->attackUp();
+        }
+        if (pressed & PAD_UP) {
+          sound->sustainUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->sustainDown();
+        }
+      }
+      if (modifier == Keymod::ab) {
+        if (pressed & PAD_LEFT) {
+          sound->panLeft();
+        }
+        if (pressed & PAD_RIGHT) {
+          sound->panRight();
+        }
+        if (pressed & PAD_UP) {
+          sound->ampUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->ampDown();
+        }
+      }
+    } else if (control == Menu1Control::filter) {
+      if (modifier == Keymod::a) {
+      } else if (modifier == Keymod::b) {
+        if (pressed & PAD_LEFT) {
+          sound->filterDown();
+        }
+        if (pressed & PAD_RIGHT) {
+          sound->filterUp();
+        }
+        if (pressed & PAD_UP) {
+          sound->filterQUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->filterQDown();
+        }
+      }
+    } else if (control == Menu1Control::mod) {
+      if (modifier == Keymod::a) {
+      } else if (modifier == Keymod::b) {
+        if (pressed & PAD_LEFT) {
+          sound->pitchbendSpeedUp();
+        }
+        if (pressed & PAD_RIGHT) {
+          sound->pitchbendSpeedDown();
+        }
+        if (pressed & PAD_UP) {
+          sound->pitchbendUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->pitchbendDown();
+        }
+      }
+    } else if (control == Menu1Control::delay) {
+      if (modifier == Keymod::a) {
+      } else if (modifier == Keymod::b) {
+        if (pressed & PAD_LEFT) {
+          if (form == Waveform::pulse) {
+            sound->pulseWidthDown();
+          }
+        }
+        if (pressed & PAD_RIGHT) {
+          if (form == Waveform::pulse) {
+            sound->pulseWidthUp();
+          }
+        }
+        if (pressed & PAD_UP) {
+          sound->delayUp();
+        }
+        if (pressed & PAD_DOWN) {
+          sound->delayDown();
+        }
+      }
+    }
+  }
+  void handle(Menu2Control control, Keymod modifier, uint32_t pressed,
+              int blockIndex) {}
+  int lastNote = 0;
+  int lastOctave = 0;
+  void handle(Keymod modifier, uint32_t pressed, int blockIndex) {
+    auto sound = &blocks[blockIndex];
+    if (modifier == Keymod::b) {
+      if (pressed & PAD_UP) {
+        sound->noteUp();
+      }
+      if (pressed & PAD_DOWN) {
+        sound->noteDown();
+      }
+      if (pressed & PAD_LEFT) {
+        sound->octaveDown();
+      }
+      if (pressed & PAD_RIGHT) {
+        sound->octaveUp();
+      }
+      lastNote = sound->note;
+      lastOctave = sound->octave;
+    } else if (modifier == Keymod::none) {
+      if (pressed == PAD_B) {
+        sound->activate(lastNote, lastOctave);
+      } else if (pressed == PAD_A) {
+        if (sound->active) {
+          clipboard = sound->cut();
+          hasClipboard = true;
+        } else if (hasClipboard) {
+          blocks[blockIndex] = clipboard;
+        }
+      }
+    }
+  }
 };
+
+#define NUMBER_OF_TRACKS 4
 
 Wave wave_q('q', Waveform::square, 0);
 Wave wave_p('p', Waveform::pulse, 1);
 Wave wave_s('s', Waveform::sawtooth, 2);
 Wave wave_n('n', Waveform::sampleHold, 3);
-Wave *waves[4] = {&wave_q, &wave_p, &wave_s, &wave_n};
+// DrumTrack drum_track;
+Track *tracks[NUMBER_OF_TRACKS] = {&wave_q, &wave_p, &wave_s, &wave_n};
 Adafruit_NeoPixel neopixels(NEOPIXEL_LENGTH, NEOPIXEL_PIN, NEO_GRB);
 
 class BleepBloopMachine {
@@ -434,8 +612,8 @@ public:
   // TODO ask abe how to write this without brackets
   long stepLength() { return ((1 / bpm) / 4) * 60000000; }
   int selectedSoundIndex = 0;
-  Menu1Selection selectedMenu1Control{0};
-  Menu2Selection selectedMenu2Control{0};
+  Menu1Control selectedMenu1Control{0};
+  Menu2Control selectedMenu2Control{0};
   int selectedWaveIndex = 0;
   int selectedBlockIndex = 0;
   int lastSelectedBlockIndex = 0;
@@ -453,10 +631,9 @@ public:
         currentStep = 0;
       }
       lastMicros = m;
-      wave_q.step(currentStep);
-      wave_p.step(currentStep);
-      wave_s.step(currentStep);
-      wave_n.step(currentStep);
+      for (auto i = 0; i < NUMBER_OF_TRACKS; i++) {
+        tracks[i]->step(currentStep);
+      }
       updateDisplay();
       for (auto i = 0; i < 4; i++) {
         int bar = (int)(currentStep / 16);
@@ -470,12 +647,12 @@ public:
     wave_s.pitchbendUpdate();
     wave_n.pitchbendUpdate();
   }
-  Wave *selectedWave() { return waves[selectedWaveIndex]; }
-  void waveUp() {
+  Track *selectedTrack() { return tracks[selectedWaveIndex]; }
+  void trackUp() {
     selectedWaveIndex = wrapping_sub(selectedWaveIndex, 3);
     display.fillScreen(ST7735_WHITE);
   }
-  void waveDown() {
+  void trackDown() {
     selectedWaveIndex = wrapping_add(selectedWaveIndex, 3);
     display.fillScreen(ST7735_WHITE);
   }
@@ -502,14 +679,14 @@ public:
     display.drawChar(8 + GRID_OFFSET_X + 3 * (BLOCK_SIZE + GRID_GAP), ty,
                      choices[3], ST7735_BLACK, ST7735_BLACK, 1);
   }
-  void drawMenu(String choices, Menu1Selection selectedControl) {
+  void drawMenu(String choices, Menu1Control selectedControl) {
     drawMenu(choices, (int)selectedControl, 0xffee);
   }
-  void drawMenu(String choices, Menu2Selection selectedControl) {
+  void drawMenu(String choices, Menu2Control selectedControl) {
     drawMenu(choices, (int)selectedControl, 0xeeff);
   }
   void updateDisplay() {
-    auto stepBlockIndex = selectedWave()->stepBlockIndex(currentStep);
+    auto stepBlockIndex = selectedTrack()->stepBlockIndex(currentStep);
     // first comes blocks
     for (auto i = 0; i <= 0xf; i++) {
       auto coord = getCoord(i);
@@ -524,21 +701,21 @@ public:
                      ST7735_BLACK);
 
     // then the labels
-    selectedWave()->updateDisplay(&display, mode, selectedMenu1Control,
-                                  selectedMenu2Control);
+    selectedTrack()->updateDisplay(&display, mode, selectedMenu1Control,
+                                   selectedMenu2Control);
     String bpmString = String(bpm);
     display.drawChar(DISPLAY_WIDTH - 20, 10, bpmString[0], ST7735_BLACK,
                      ST7735_BLACK, 1);
     display.drawChar(DISPLAY_WIDTH - 15, 10, bpmString[1], ST7735_BLACK,
                      ST7735_BLACK, 1);
     display.drawChar(DISPLAY_WIDTH - 10, 10, bpmString[2], ST7735_BLACK,
-                       ST7735_BLACK, 1);
+                     ST7735_BLACK, 1);
 
-    if (selectedWave()->bpmDivider != 1) {
+    if (selectedTrack()->bpmDivider != 1) {
       display.drawChar(DISPLAY_WIDTH - 15, 20, '/', ST7735_BLACK, ST7735_BLACK,
                        1);
       display.drawChar(DISPLAY_WIDTH - 10, 20,
-                       String(selectedWave()->bpmDivider)[0], ST7735_BLACK,
+                       String(selectedTrack()->bpmDivider)[0], ST7735_BLACK,
                        ST7735_BLACK, 1);
     }
 
@@ -558,8 +735,14 @@ public:
     bool a_mode = !ab_mode && held & PAD_A;
     bool b_mode = !ab_mode && held & PAD_B;
     bool start_mode = !ab_mode && !a_mode && !b_mode && held & PAD_START;
+    bool select_mode = !ab_mode && !a_mode && !b_mode && held & PAD_SELECT;
     bool none_mode = !ab_mode && !a_mode && !b_mode && !start_mode;
-    auto sound = &selectedWave()->sounds[selectedBlockIndex];
+    Keymod modifier = ab_mode       ? Keymod::ab
+                      : a_mode      ? Keymod::a
+                      : b_mode      ? Keymod::b
+                      : start_mode  ? Keymod::start
+                      : select_mode ? Keymod::select
+                                    : Keymod::none;
 
     if (b_mode && released) {
       ignoreRelease |= PAD_B;
@@ -569,12 +752,51 @@ public:
       ignoreRelease |= PAD_A;
     }
 
+    if (ab_mode && released) {
+      ignoreRelease |= PAD_B;
+      ignoreRelease |= PAD_A;
+    }
+
     if (start_mode && released) {
       ignoreRelease |= PAD_START;
     }
 
-    switch (mode) {
-    case MenuMode::menu1:
+    if (select_mode && released) {
+      ignoreRelease |= PAD_SELECT;
+    }
+
+    uint32_t pressed = released ^ ignoreRelease;
+
+    // first up: facts of life
+    if (mode == MenuMode::live) {
+      if (none_mode) {
+        if (released & PAD_UP && selectedBlockIndex > 0x3) {
+          selectedBlockIndex -= 4;
+        }
+        if (released & PAD_DOWN && selectedBlockIndex < 0xc) {
+          selectedBlockIndex += 4;
+        }
+        if (released & PAD_LEFT && selectedBlockIndex > 0x0) {
+          selectedBlockIndex -= 1;
+        }
+        if (released & PAD_RIGHT && selectedBlockIndex < 0xf) {
+          selectedBlockIndex += 1;
+        }
+        if (pressed == PAD_START) {
+          menu(MenuMode::menu1);
+        }
+      } else if (start_mode) {
+        if (released == PAD_DOWN) {
+          trackDown();
+        } else if (released == PAD_UP) {
+          trackUp();
+        } else if (released == PAD_LEFT) {
+          // chainLeft();
+        } else if (released == PAD_RIGHT) {
+          // chainRight();
+        }
+      }
+    } else {
       if (start_mode) {
         if (released & PAD_UP && selectedBlockIndex > 0x3) {
           selectedBlockIndex -= 4;
@@ -596,248 +818,73 @@ public:
           selectedMenu1Control = --selectedMenu1Control;
         }
         if (released & PAD_DOWN) {
-          waveDown();
+          trackDown();
         }
         if (released & PAD_UP) {
-          waveUp();
+          trackUp();
         }
-        if (released == PAD_START) {
-          if (!(ignoreRelease & PAD_START)) {
+        if (pressed == PAD_START) {
+          if (mode == MenuMode::menu1) {
             menu(MenuMode::menu2);
-          }
-        }
-        if (released == PAD_B) {
-          if (!(ignoreRelease & PAD_B)) {
-            menu(MenuMode::live);
-          }
-        }
-      }
-      if (selectedMenu1Control == Menu1Selection::env) {
-        if (b_mode) {
-          if (released & PAD_LEFT) {
-            sound->attackDown();
-          }
-          if (released & PAD_RIGHT) {
-            sound->attackUp();
-          }
-          if (released & PAD_UP) {
-            sound->sustainUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->sustainDown();
-          }
-        }
-        if (a_mode) {
-          if (released & PAD_RIGHT) {
-            sound->decayUp();
-          }
-          if (released & PAD_LEFT) {
-            sound->decayDown();
-          }
-          if (released & PAD_UP) {
-            sound->sustainUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->sustainDown();
-          }
-        }
-        if (ab_mode) {
-          if (released & PAD_LEFT) {
-            sound->panLeft();
-          }
-          if (released & PAD_RIGHT) {
-            sound->panRight();
-          }
-          if (released & PAD_UP) {
-            sound->ampUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->ampDown();
-          }
-        }
-      } else if (selectedMenu1Control == Menu1Selection::filter) {
-        if (b_mode) {
-          if (released & PAD_LEFT) {
-            sound->filterDown();
-          }
-          if (released & PAD_RIGHT) {
-            sound->filterUp();
-          }
-          if (released & PAD_UP) {
-            sound->filterQUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->filterQDown();
-          }
-        } else if (ab_mode) {
-          for (auto i = 0; i <= 0xf; i++) {
-            selectedWave()->sounds[i].filterFreq =
-                8000.0 * ((joyX + 512) / 1024);
-            selectedWave()->sounds[i].filterQ = (joyY + 512) / 1024;
-          }
-        }
-      } else if (selectedMenu1Control == Menu1Selection::mod) {
-        if (b_mode) {
-          if (released & PAD_LEFT) {
-            sound->pitchbendSpeedUp();
-          }
-          if (released & PAD_RIGHT) {
-            sound->pitchbendSpeedDown();
-          }
-          if (released & PAD_UP) {
-            sound->pitchbendUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->pitchbendDown();
-          }
-        }
-      } else if (selectedMenu1Control == Menu1Selection::delay) {
-        if (b_mode) {
-          if (released & PAD_LEFT) {
-            // sound->delayUp();
-          }
-          if (released & PAD_RIGHT) {
-            //  sound->pitchbendSpeedUp();
-          }
-          if (released & PAD_UP) {
-            sound->delayUp();
-          }
-          if (released & PAD_DOWN) {
-            sound->delayDown();
-          }
-        }
-      }
-      break;
-    case MenuMode::menu2:
-      if (start_mode) {
-        if (released & PAD_UP && selectedBlockIndex > 0x3) {
-          selectedBlockIndex -= 4;
-        }
-        if (released & PAD_DOWN && selectedBlockIndex < 0xc) {
-          selectedBlockIndex += 4;
-        }
-        if (released & PAD_LEFT && selectedBlockIndex > 0x0) {
-          selectedBlockIndex -= 1;
-        }
-        if (released & PAD_RIGHT && selectedBlockIndex < 0xf) {
-          selectedBlockIndex += 1;
-        }
-      } else if (none_mode) {
-        if (released & PAD_DOWN) {
-          waveDown();
-        }
-        if (released & PAD_UP) {
-          waveUp();
-        }
-        if (released & PAD_RIGHT) {
-          selectedMenu2Control = ++selectedMenu2Control;
-        }
-        if (released & PAD_LEFT) {
-          selectedMenu2Control = --selectedMenu2Control;
-        }
-        if (released == PAD_START) {
-          if (!(ignoreRelease & PAD_START)) {
+          } else {
             menu(MenuMode::menu1);
           }
         }
-        if (released == PAD_B) {
-          if (!(ignoreRelease & PAD_B)) {
-            menu(MenuMode::live);
-          }
+        if (pressed == PAD_B) {
+          menu(MenuMode::live);
         }
       }
-      if (selectedMenu2Control == Menu2Selection::bpm) {
-        if (b_mode) {
-          if (released & PAD_LEFT) {
-            bpm = saturating_sub(bpm, 240.0, 20.0, 40.0);
-            display.fillScreen(ST7735_WHITE);
-          }
-          if (released & PAD_RIGHT) {
-            bpm = saturating_add(bpm, 240.0, 20.0, 40.0);
-            display.fillScreen(ST7735_WHITE);
-          }
-          if (released & PAD_DOWN) {
-            selectedWave()->bpmDividerDown();
-            display.fillScreen(ST7735_WHITE);
-          }
-          if (released & PAD_UP) {
-            selectedWave()->bpmDividerUp();
-            display.fillScreen(ST7735_WHITE);
-          }
-        }
-      }
-      break;
-    case MenuMode::live:
-      if (b_mode) {
-
-        if (released & PAD_UP) {
-          sound->noteUp();
-        }
-        if (released & PAD_DOWN) {
-          sound->noteDown();
-        }
-        if (released & PAD_LEFT) {
-          sound->octaveDown();
-        }
-        if (released & PAD_RIGHT) {
-          sound->octaveUp();
-        }
-        lastNote = sound->note;
-        lastOctave = sound->octave;
-      } else if (none_mode) {
-        if (released & PAD_UP && selectedBlockIndex > 0x3) {
-          selectedBlockIndex -= 4;
-        }
-        if (released & PAD_DOWN && selectedBlockIndex < 0xc) {
-          selectedBlockIndex += 4;
-        }
-        if (released & PAD_LEFT && selectedBlockIndex > 0x0) {
-          selectedBlockIndex -= 1;
-        }
-        if (released & PAD_RIGHT && selectedBlockIndex < 0xf) {
-          selectedBlockIndex += 1;
-        }
-
-        if (released == PAD_B) {
-          sound->activate(lastNote, lastOctave);
-        } else if (released == PAD_A) {
-          if (sound->active) {
-            // TODO this can be done by assigning it to a variable w/o using &
-            clipboard = sound->cut();
-            hasClipboard = true;
-          } else if (hasClipboard) {
-            selectedWave()->sounds[selectedBlockIndex] = clipboard;
+      if (mode == MenuMode::menu2) {
+        if (selectedMenu2Control == Menu2Control::bpm) {
+          if (b_mode) {
+            if (released & PAD_LEFT) {
+              bpm = saturating_sub(bpm, 240.0, 20.0, 40.0);
+              display.fillScreen(ST7735_WHITE);
+            }
+            if (released & PAD_RIGHT) {
+              bpm = saturating_add(bpm, 240.0, 20.0, 40.0);
+              display.fillScreen(ST7735_WHITE);
+            }
+            if (released & PAD_DOWN) {
+              selectedTrack()->bpmDividerDown();
+              display.fillScreen(ST7735_WHITE);
+            }
+            if (released & PAD_UP) {
+              selectedTrack()->bpmDividerUp();
+              display.fillScreen(ST7735_WHITE);
+            }
           }
         }
-        if (released == PAD_START) {
-          if (!(ignoreRelease & PAD_START)) {
-            menu(MenuMode::menu1);
-          }
-        }
-      } else if (start_mode) {
-        if (released == PAD_DOWN) {
-          waveDown();
-        } else if (released == PAD_UP) {
-          waveUp();
-        } else if (released == PAD_LEFT) {
-          // chainLeft();
-        } else if (released == PAD_RIGHT) {
-          // chainRight();
-        }
-        break;
       }
     }
+
+    if (mode == MenuMode::live) {
+      selectedTrack()->handle(modifier, pressed, selectedBlockIndex);
+    } else if (mode == MenuMode::menu1) {
+      selectedTrack()->handle(selectedMenu1Control, modifier, pressed,
+                              selectedBlockIndex);
+    } else if (mode == MenuMode::menu2) {
+      selectedTrack()->handle(selectedMenu2Control, modifier, pressed,
+                              selectedBlockIndex);
+    }
+
     if (released == PAD_B && ignoreRelease & PAD_B) {
       ignoreRelease ^= PAD_B;
     }
+
     if (released == PAD_A && ignoreRelease & PAD_A) {
       ignoreRelease ^= PAD_A;
     }
+
     if (released == PAD_START && ignoreRelease & PAD_START) {
       ignoreRelease ^= PAD_START;
     }
+
+    if (released == PAD_SELECT && ignoreRelease & PAD_SELECT) {
+      ignoreRelease ^= PAD_SELECT;
+    }
   }
-  };
+};
 
 BleepBloopMachine machine;
 
