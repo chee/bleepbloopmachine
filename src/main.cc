@@ -159,8 +159,6 @@ public:
   float filterQ = 0.618;
   float filterFreq = 8000.0;
   int filterStage = 0;
-  float pitchbend = 1.0;
-  float pitchbendSpeed = 0.0025;
   float pulseWidth = 0.5;
   float frequency() { return freq[note][octave]; }
   void activate(int n, int o) {
@@ -169,16 +167,6 @@ public:
     active = true;
   }
   void activate() { active = true; }
-  void pitchbendUp() { pitchbend = saturating_sub(pitchbend, 10.0, 0.1, 0); }
-  void pitchbendDown() {
-    pitchbend = saturating_add(pitchbend, 10.0, 0.1, 0.0);
-  }
-  void pitchbendSpeedUp() {
-    pitchbendSpeed = saturating_sub(pitchbendSpeed, 0.1, 0.0025, 0.0025);
-  }
-  void pitchbendSpeedDown() {
-    pitchbendSpeed = saturating_add(pitchbendSpeed, 0.1, 0.0025, 0.0025);
-  }
   void filterDown() {
     filterFreq = saturating_sub(filterFreq, 10000.0, 100.0, 40.0);
   }
@@ -224,8 +212,6 @@ public:
     s.filterFreq = filterFreq;
     s.filterQ = filterQ;
     s.filterType = filterType;
-    s.pitchbendSpeed = pitchbendSpeed;
-    s.pitchbend = pitchbend;
     s.pulseWidth = pulseWidth;
     return s;
   }
@@ -282,122 +268,86 @@ public:
 };
 
 class Wave : public Track {
-  enum PitchbendState { idle, inc, dec };
-  PitchbendState pitchbendState = PitchbendState::idle;
-  float pitchbendSpeed = 0.1;
-  float pitchbend = 1.0;
-  float prebendFreq = 0.0;
-  void pitchbendStart() {
-    if (pitchbend > 1.0) {
-      pitchbendState = PitchbendState::dec;
-    } else if (pitchbend < 1.0) {
-      pitchbendState = PitchbendState::inc;
-    } else {
-      pitchbendState = PitchbendState::idle;
-    }
-    synthL.frequency(prebendFreq * pitchbend);
-    synthR.frequency(prebendFreq * pitchbend);
-  }
   AudioConnection *patches[7];
 
 public:
-  void pitchbendUpdate() {
-    if (pitchbendState == PitchbendState::idle) {
-      return;
-    }
-    if (pitchbendState == PitchbendState::dec) {
-      pitchbend -= pitchbendSpeed;
-      if (pitchbend <= 1.0) {
-        pitchbendState = PitchbendState::idle;
-      }
-    }
-    if (pitchbendState == PitchbendState::inc) {
-      pitchbend += pitchbendSpeed;
-      if (pitchbend >= 1.0) {
-        pitchbendState = PitchbendState::idle;
-      }
-    }
-    synthL.frequency(prebendFreq * pitchbend);
-    synthR.frequency(prebendFreq * pitchbend);
-  }
   Waveform form;
-  AudioSynthWaveform synthL = AudioSynthWaveform();
-  AudioSynthWaveform synthR = AudioSynthWaveform();
-  AudioEffectEnvelope envL = AudioEffectEnvelope();
-  AudioEffectEnvelope envR = AudioEffectEnvelope();
-  AudioFilterBiquad filterL = AudioFilterBiquad();
-  AudioFilterBiquad filterR = AudioFilterBiquad();
-  AudioMixer4 mixerL = AudioMixer4();
-  AudioMixer4 mixerR = AudioMixer4();
-  SoundBlock blocks[16];
-  Wave(unsigned char n, Waveform f, int mixerIndex) : form{f} {
+  AudioSynthWaveform *synthL = new AudioSynthWaveform();
+  AudioSynthWaveform *synthR = new AudioSynthWaveform();
+  AudioEffectEnvelope *envL = new AudioEffectEnvelope();
+  AudioEffectEnvelope *envR = new AudioEffectEnvelope();
+  AudioFilterBiquad *filterL = new AudioFilterBiquad();
+  AudioFilterBiquad *filterR = new AudioFilterBiquad();
+  AudioMixer4 *mixerL = new AudioMixer4();
+  AudioMixer4 *mixerR = new AudioMixer4();
+  SoundBlock *blocks = new SoundBlock[16];
+  Wave(unsigned char n, Waveform f, int mixerIndex) {
+    form = f;
     name = n;
-    patches[0] = new AudioConnection(synthL, envL);
-    patches[1] = new AudioConnection(envL, filterL);
-    patches[2] = new AudioConnection(filterL, 0, mixerL, 0);
-    patches[3] = new AudioConnection(synthR, envR);
-    patches[4] = new AudioConnection(envR, filterR);
-    patches[5] = new AudioConnection(filterR, 0, mixerR, 0);
-    patches[6] = new AudioConnection(mixerL, 0, mainmixerL, mixerIndex);
-    patches[7] = new AudioConnection(mixerR, 0, mainmixerR, mixerIndex);
-    for (auto i = 0; i < 16; i++) {
-      blocks[i] = SoundBlock();
-    }
-    filterL.setLowpass(0, 8000);
-    filterR.setLowpass(0, 8000);
-    synthL.begin((int)form);
-    synthR.begin((int)form);
-    synthL.amplitude(0.5);
-    synthR.amplitude(0.5);
-    envL.sustain(0.0);
-    envR.sustain(0.0);
-    if (form == Waveform::pulse) {
-      synthL.pulseWidth(0.5);
-      synthR.pulseWidth(0.5);
+    patches[0] = new AudioConnection(*synthL, *envL);
+    patches[1] = new AudioConnection(*envL, *filterL);
+    patches[2] = new AudioConnection(*filterL, 0, *mixerL, 0);
+    patches[3] = new AudioConnection(*synthR, *envR);
+    patches[4] = new AudioConnection(*envR, *filterR);
+    patches[5] = new AudioConnection(*filterR, 0, *mixerR, 0);
+    patches[6] = new AudioConnection(*mixerL, 0, mainmixerL, mixerIndex);
+    patches[7] = new AudioConnection(*mixerR, 0, mainmixerR, mixerIndex);
+    filterL->setLowpass(0, 12000);
+    filterR->setLowpass(0, 12000);
+    synthL->begin((int)f);
+    synthR->begin((int)f);
+    synthL->amplitude(0.4);
+    synthR->amplitude(0.4);
+    envL->sustain(1.0);
+    envR->sustain(1.0);
+    if (f == Waveform::pulse) {
+      synthL->pulseWidth(0.5);
+      synthR->pulseWidth(0.5);
     }
   }
-  ~Wave() { delete[] patches; }
+  ~Wave() {
+    // TODO  delete pointers
+    delete[] patches;
+  }
   void play(int blockIndex) {
     auto sound = &blocks[blockIndex];
     if (!sound->active) {
       return;
     }
-    prebendFreq = sound->frequency();
-    synthL.frequency(prebendFreq);
-    synthR.frequency(prebendFreq);
-    envL.attack(sound->attack);
-    envL.decay(sound->decay);
-    envL.delay(sound->delay);
-    envL.sustain(sound->sustain);
-    envR.attack(sound->attack);
-    envR.decay(sound->decay);
-    envR.delay(sound->delay);
-    envR.sustain(sound->sustain);
-    mixerL.gain(0, sound->amp / 2);
-    mixerR.gain(0, sound->amp / 2);
+    synthL->frequency(sound->frequency());
+    synthR->frequency(sound->frequency());
+    envL->attack(sound->attack);
+    envL->decay(sound->decay);
+    envL->delay(sound->delay);
+    envL->sustain(sound->sustain);
+    envR->attack(sound->attack);
+    envR->decay(sound->decay);
+    envR->delay(sound->delay);
+    envR->sustain(sound->sustain);
+    mixerL->gain(0, sound->amp / 2);
+    mixerR->gain(0, sound->amp / 2);
     if (sound->filterType == SoundBlock::Filter::low) {
-      filterL.setLowpass(sound->filterStage, sound->filterFreq, sound->filterQ);
-      filterR.setLowpass(sound->filterStage, sound->filterFreq, sound->filterQ);
+      filterL->setLowpass(sound->filterStage, sound->filterFreq,
+                          sound->filterQ);
+      filterR->setLowpass(sound->filterStage, sound->filterFreq,
+                          sound->filterQ);
     }
     if (sound->pan < 0) {
-      mixerL.gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
-      mixerR.gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
+      mixerL->gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
+      mixerR->gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
     } else if (sound->pan > 0) {
-      mixerR.gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
-      mixerL.gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
+      mixerR->gain(0, (sound->amp / 2) + (abs(sound->pan) / 2));
+      mixerL->gain(0, (sound->amp / 2) - (abs(sound->pan) / 2));
     }
     if (form == Waveform::pulse) {
-      synthL.pulseWidth(sound->pulseWidth);
-      synthR.pulseWidth(sound->pulseWidth);
+      synthL->pulseWidth(sound->pulseWidth);
+      synthR->pulseWidth(sound->pulseWidth);
     }
-    pitchbendSpeed = sound->pitchbendSpeed;
-    pitchbend = sound->pitchbend;
-    pitchbendStart();
-    envL.noteOn();
-    envR.noteOn();
+    envL->noteOn();
+    envR->noteOn();
   }
-  void step(int currentTick) {
-    auto idx = stepBlockIndex(currentTick);
+  void step(int currentStep) {
+    auto idx = stepBlockIndex(currentStep);
     if (idx != lastStepBlockIndex) {
       lastStepBlockIndex = idx;
       play(idx);
@@ -411,14 +361,14 @@ public:
       if (!sound->active)
         continue;
       String note = note_names[sound->note];
-      display->drawChar(point.x + 2, point.y + 2, note[0], ST7735_BLACK,
+      display->fillRect(point.x + (sound->octave * 2), point.y, 2, 5,
+                        sound->octave * 360);
+      display->drawChar(point.x + 2, point.y + 5, note[0], ST7735_BLACK,
                         ST7735_BLACK, 1);
       if (note.length() == 2) {
-        display->drawChar(point.x + 9, point.y + 2, '#', ST7735_BLACK,
+        display->drawChar(point.x + 9, point.y + 5, '#', ST7735_BLACK,
                           ST7735_BLACK, 1);
       }
-      display->fillRect(point.x + (sound->octave * 2), point.y, 2, 2,
-                        sound->octave * 100);
       if (mode == MenuMode::live) {
         // only note name and octave
       } else if (mode == MenuMode::menu1) {
@@ -523,32 +473,20 @@ public:
     } else if (control == Menu1Control::mod) {
       if (modifier == Keymod::a) {
       } else if (modifier == Keymod::b) {
-        if (pressed & PAD_LEFT) {
-          sound->pitchbendSpeedUp();
-        }
-        if (pressed & PAD_RIGHT) {
-          sound->pitchbendSpeedDown();
-        }
         if (pressed & PAD_UP) {
-          sound->pitchbendUp();
+          if (form == Waveform::pulse) {
+            sound->pulseWidthUp();
+          }
         }
         if (pressed & PAD_DOWN) {
-          sound->pitchbendDown();
+          if (form == Waveform::pulse) {
+            sound->pulseWidthDown();
+          }
         }
       }
     } else if (control == Menu1Control::delay) {
       if (modifier == Keymod::a) {
       } else if (modifier == Keymod::b) {
-        if (pressed & PAD_LEFT) {
-          if (form == Waveform::pulse) {
-            sound->pulseWidthDown();
-          }
-        }
-        if (pressed & PAD_RIGHT) {
-          if (form == Waveform::pulse) {
-            sound->pulseWidthUp();
-          }
-        }
         if (pressed & PAD_UP) {
           sound->delayUp();
         }
@@ -561,7 +499,7 @@ public:
   void handle(Menu2Control control, Keymod modifier, uint32_t pressed,
               int blockIndex) {}
   int lastNote = 0;
-  int lastOctave = 0;
+  int lastOctave = 3;
   void handle(Keymod modifier, uint32_t pressed, int blockIndex) {
     auto sound = &blocks[blockIndex];
     if (modifier == Keymod::b) {
@@ -594,16 +532,9 @@ public:
   }
 };
 
-#define NUMBER_OF_TRACKS 4
-
-Wave wave_q('q', Waveform::square, 0);
-Wave wave_p('p', Waveform::pulse, 1);
-Wave wave_s('s', Waveform::sawtooth, 2);
-Wave wave_n('n', Waveform::sampleHold, 3);
-// DrumTrack drum_track;
-Track *tracks[NUMBER_OF_TRACKS] = {&wave_q, &wave_p, &wave_s, &wave_n};
 Adafruit_NeoPixel neopixels(NEOPIXEL_LENGTH, NEOPIXEL_PIN, NEO_GRB);
 
+#define NUMBER_OF_TRACKS 4
 class BleepBloopMachine {
 public:
   MenuMode mode = MenuMode::live;
@@ -618,11 +549,17 @@ public:
   int selectedBlockIndex = 0;
   int lastSelectedBlockIndex = 0;
   int currentStep = 0;
-  int lastNote = 0;
-  int lastOctave = 3;
+
   SoundBlock clipboard;
   bool hasClipboard = false;
   int ignoreRelease = 0;
+  Track *tracks[NUMBER_OF_TRACKS];
+  void begin() {
+    tracks[0] = new Wave('q', Waveform::square, 0);
+    tracks[1] = new Wave('p', Waveform::pulse, 1);
+    tracks[2] = new Wave('s', Waveform::sawtooth, 2);
+    tracks[3] = new Wave('n', Waveform::sampleHold, 3);
+  }
   void step() {
     auto m = micros();
     if (m - lastMicros >= stepLength()) {
@@ -642,18 +579,15 @@ public:
       }
       neopixels.show();
     }
-    wave_q.pitchbendUpdate();
-    wave_p.pitchbendUpdate();
-    wave_s.pitchbendUpdate();
-    wave_n.pitchbendUpdate();
   }
   Track *selectedTrack() { return tracks[selectedWaveIndex]; }
   void trackUp() {
-    selectedWaveIndex = wrapping_sub(selectedWaveIndex, 3);
+    selectedWaveIndex = wrapping_sub(selectedWaveIndex, NUMBER_OF_TRACKS - 1);
     display.fillScreen(ST7735_WHITE);
   }
   void trackDown() {
-    selectedWaveIndex = wrapping_add(selectedWaveIndex, 3);
+    // TODO only blank out the location of the track char
+    selectedWaveIndex = wrapping_add(selectedWaveIndex, NUMBER_OF_TRACKS - 1);
     display.fillScreen(ST7735_WHITE);
   }
   void drawMenu(String choices, int selectedControl, int background) {
@@ -898,6 +832,7 @@ Controls controls;
 
 void setup() {
   Serial.begin(115200);
+  machine.begin();
   AudioMemory(18);
   controls.begin();
   display.initR(INITR_BLACKTAB);
@@ -906,7 +841,7 @@ void setup() {
   digitalWrite(DISPLAY_BACKLIGHT, HIGH);
   display.fillScreen(ST77XX_WHITE);
   neopixels.begin();
-  neopixels.setBrightness(10);
+  neopixels.setBrightness(4);
   neopixels.fill(ST7735_CYAN, 0, 4);
   neopixels.show();
 }
