@@ -38,6 +38,12 @@
 Adafruit_ST7735 display =
     Adafruit_ST7735(&SPI1, DISPLAY_CS, DISPLAY_DC, DISPLAY_RST);
 
+#include "kit/AudioSampleC.h"
+#include "kit/AudioSampleH.h"
+#include "kit/AudioSampleK.h"
+#include "kit/AudioSampleO.h"
+#include "kit/AudioSampleS.h"
+
 enum class Waveform {
   sine,
   sawtooth,
@@ -141,14 +147,25 @@ Point getCoord(int idx) {
 #define MAX_ATTACK 400.0
 #define MAX_DECAY 400.0
 
-class Block {};
+class Block {
+public:
+  bool active = false;
+  void activate() { active = true; }
+  void deactivate() { active = false; }
+};
+
+class KitBlock : public Block {
+public:
+  int sample;
+  void sampleUp() { sample = wrapping_add(sample, 4); }
+  void sampleDown() { sample = wrapping_sub(sample, 4); }
+};
 
 class SoundBlock : public Block {
 public:
   enum Filter { low };
   int note = 0;
   int octave = 3;
-  bool active = false;
   float attack = 10.0;
   float decay = 40.0;
   float delay = 0.0;
@@ -166,7 +183,6 @@ public:
     octave = o;
     active = true;
   }
-  void activate() { active = true; }
   void filterDown() {
     filterFreq = saturating_sub(filterFreq, 10000.0, 100.0, 40.0);
   }
@@ -215,14 +231,21 @@ public:
     s.pulseWidth = pulseWidth;
     return s;
   }
-  SoundBlock() {}
 };
 
 SoundBlock clipboard;
 bool hasClipboard = false;
 
+AudioMixer4 mainmixer0L;
+AudioMixer4 mainmixer0R;
+AudioMixer4 mainmixer1L;
+AudioMixer4 mainmixer1R;
 AudioMixer4 mainmixerL;
 AudioMixer4 mainmixerR;
+AudioConnection p0l(mainmixer0L, 0, mainmixerL, 0);
+AudioConnection p0r(mainmixer0R, 0, mainmixerR, 0);
+AudioConnection p1l(mainmixer1L, 0, mainmixerL, 1);
+AudioConnection p1r(mainmixer1R, 0, mainmixerR, 1);
 AudioOutputAnalogStereo headphones;
 AudioConnection left_ear_patch(mainmixerL, 0, headphones, 0);
 AudioConnection right_ear_patch(mainmixerR, 0, headphones, 1);
@@ -264,7 +287,94 @@ public:
   virtual void handle(Menu2Control control, Keymod modifier, uint32_t pressed,
                       int blockIndex) = 0;
   virtual void handle(Keymod modifier, uint32_t pressed, int blockIndex) = 0;
-  virtual void step(int currentTick) = 0;
+  void step(int currentStep) {
+    auto idx = stepBlockIndex(currentStep);
+    if (idx != lastStepBlockIndex) {
+      lastStepBlockIndex = idx;
+      play(idx);
+    }
+  }
+  virtual void play(int blockIndex) = 0;
+};
+
+class KitTrack : public Track {
+  AudioPlayMemory *player = new AudioPlayMemory();
+  AudioConnection *patches[2];
+
+public:
+  KitBlock *blocks = new KitBlock[16];
+  // TODO update display should be the same every time, it should grab info it
+  // needs to display from the blocks?
+  void updateDisplay(Adafruit_GFX *display, MenuMode mode,
+                     Menu1Control menu1control, Menu2Control menu2control) {}
+  void handle(Menu1Control control, Keymod modifier, uint32_t pressed,
+              int blockIndex){};
+  void handle(Menu2Control control, Keymod modifier, uint32_t pressed,
+              int blockIndex){};
+  void handle(Keymod modifier, uint32_t pressed, int blockIndex) {
+    auto block = &blocks[blockIndex];
+    if (modifier == Keymod::b) {
+      // if (pressed & PAD_UP) {
+      //   block->sampleRateUp();
+      // }
+      // if (pressed & PAD_DOWN) {
+      //   block->sampleRateDown();
+      // }
+      if (pressed & PAD_LEFT) {
+        block->sampleDown();
+      }
+      if (pressed & PAD_RIGHT) {
+        block->sampleUp();
+      }
+    } else if (modifier == Keymod::none) {
+      if (pressed == PAD_B) {
+        block->activate();
+        Serial.println("activated");
+      } else if (pressed == PAD_A) {
+        block->deactivate();
+        // TODO local clipboard
+        // if (block->active) {
+        //   //clipboard = sound->cut();
+        //   //hasClipboard = true;
+        // } else if (hasClipboard) {
+        //   //blocks[blockIndex] = clipboard;
+        // }
+      }
+    }
+  }
+  void play(int blockIndex) {
+    auto block = &blocks[blockIndex];
+
+    if (!block->active) {
+      return;
+    }
+
+    switch (block->sample) {
+    case 0:
+      player->play(AudioSampleK);
+      break;
+    case 1:
+      player->play(AudioSampleS);
+      break;
+    case 2:
+      player->play(AudioSampleH);
+      break;
+    case 3:
+      player->play(AudioSampleO);
+      break;
+    case 4:
+      player->play(AudioSampleC);
+      break;
+    default:
+      break;
+    }
+  }
+  KitTrack(unsigned char n, AudioMixer4 &lMixer, AudioMixer4 &rMixer,
+           int mixerIndex) {
+    name = n;
+    patches[0] = new AudioConnection(*player, 0, lMixer, mixerIndex);
+    patches[1] = new AudioConnection(*player, 0, rMixer, mixerIndex);
+  }
 };
 
 class Wave : public Track {
@@ -281,7 +391,8 @@ public:
   AudioMixer4 *mixerL = new AudioMixer4();
   AudioMixer4 *mixerR = new AudioMixer4();
   SoundBlock *blocks = new SoundBlock[16];
-  Wave(unsigned char n, Waveform f, int mixerIndex) {
+  Wave(unsigned char n, Waveform f, AudioMixer4 &lmixer, AudioMixer4 &rmixer,
+       int mixerIndex) {
     form = f;
     name = n;
     patches[0] = new AudioConnection(*synthL, *envL);
@@ -290,14 +401,14 @@ public:
     patches[3] = new AudioConnection(*synthR, *envR);
     patches[4] = new AudioConnection(*envR, *filterR);
     patches[5] = new AudioConnection(*filterR, 0, *mixerR, 0);
-    patches[6] = new AudioConnection(*mixerL, 0, mainmixerL, mixerIndex);
-    patches[7] = new AudioConnection(*mixerR, 0, mainmixerR, mixerIndex);
+    patches[6] = new AudioConnection(*mixerL, 0, lmixer, mixerIndex);
+    patches[7] = new AudioConnection(*mixerR, 0, rmixer, mixerIndex);
     filterL->setLowpass(0, 12000);
     filterR->setLowpass(0, 12000);
     synthL->begin((int)f);
     synthR->begin((int)f);
-    synthL->amplitude(0.4);
-    synthR->amplitude(0.4);
+    synthL->amplitude(1.0);
+    synthR->amplitude(1.0);
     envL->sustain(1.0);
     envR->sustain(1.0);
     if (f == Waveform::pulse) {
@@ -345,13 +456,6 @@ public:
     }
     envL->noteOn();
     envR->noteOn();
-  }
-  void step(int currentStep) {
-    auto idx = stepBlockIndex(currentStep);
-    if (idx != lastStepBlockIndex) {
-      lastStepBlockIndex = idx;
-      play(idx);
-    }
   }
   void updateDisplay(Adafruit_GFX *display, MenuMode mode,
                      Menu1Control menu1control, Menu2Control menu2control) {
@@ -534,7 +638,8 @@ public:
 
 Adafruit_NeoPixel neopixels(NEOPIXEL_LENGTH, NEOPIXEL_PIN, NEO_GRB);
 
-#define NUMBER_OF_TRACKS 4
+// TODO sizeof()/sizeof[0]
+#define NUMBER_OF_TRACKS 5
 class BleepBloopMachine {
 public:
   MenuMode mode = MenuMode::live;
@@ -555,10 +660,13 @@ public:
   int ignoreRelease = 0;
   Track *tracks[NUMBER_OF_TRACKS];
   void begin() {
-    tracks[0] = new Wave('q', Waveform::square, 0);
-    tracks[1] = new Wave('p', Waveform::pulse, 1);
-    tracks[2] = new Wave('s', Waveform::sawtooth, 2);
-    tracks[3] = new Wave('n', Waveform::sampleHold, 3);
+    // TODO refactor?, something like track.connect(l, r, idx)
+    tracks[0] = new Wave('q', Waveform::square, mainmixer0L, mainmixer0R, 0);
+    tracks[1] = new Wave('p', Waveform::pulse, mainmixer0L, mainmixer0R, 1);
+    tracks[2] = new Wave('s', Waveform::sawtooth, mainmixer0L, mainmixer0R, 2);
+    tracks[3] =
+        new Wave('n', Waveform::sampleHold, mainmixer0L, mainmixer0R, 3);
+    tracks[4] = new KitTrack('k', mainmixer1L, mainmixer1R, 0);
   }
   void step() {
     auto m = micros();
@@ -745,27 +853,35 @@ public:
           selectedBlockIndex += 1;
         }
       } else if (none_mode) {
-        if (released & PAD_RIGHT) {
-          selectedMenu1Control = ++selectedMenu1Control;
-        }
-        if (released & PAD_LEFT) {
-          selectedMenu1Control = --selectedMenu1Control;
-        }
         if (released & PAD_DOWN) {
           trackDown();
         }
         if (released & PAD_UP) {
           trackUp();
         }
-        if (pressed == PAD_START) {
-          if (mode == MenuMode::menu1) {
-            menu(MenuMode::menu2);
-          } else {
-            menu(MenuMode::menu1);
-          }
-        }
         if (pressed == PAD_B) {
           menu(MenuMode::live);
+        }
+        if (mode == MenuMode::menu1) {
+          if (released & PAD_RIGHT) {
+            selectedMenu1Control = ++selectedMenu1Control;
+          }
+          if (released & PAD_LEFT) {
+            selectedMenu1Control = --selectedMenu1Control;
+          }
+          if (pressed == PAD_START) {
+            menu(MenuMode::menu2);
+          }
+        } else if (menu == MenuMode::menu2) {
+          if (released & PAD_RIGHT) {
+            selectedMenu2Control = ++selectedMenu2Control;
+          }
+          if (released & PAD_LEFT) {
+            selectedMenu2Control = --selectedMenu2Control;
+          }
+          if (pressed == PAD_START) {
+            menu(MenuMode::menu1);
+          }
         }
       }
       if (mode == MenuMode::menu2) {
