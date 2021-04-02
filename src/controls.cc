@@ -94,3 +94,20 @@ uint32_t Controls::readButtons(void) {
 uint32_t Controls::justPressed() { return justpressed_buttons; }
 
 uint32_t Controls::justReleased() { return justreleased_buttons; }
+
+Menu1Control &operator++(Menu1Control &s) {
+  return s = Menu1Control{wrapping_add((int)s, 3)};
+}
+
+Menu1Control &operator--(Menu1Control &s) {
+  return s = Menu1Control{wrapping_sub((int)s, 3)};
+}
+
+
+Menu2Control &operator++(Menu2Control &s) {
+  return s = Menu2Control{wrapping_add((int)s, 3)};
+}
+
+Menu2Control &operator--(Menu2Control &s) {
+  return s = Menu2Control{wrapping_sub((int)s, 3)};
+}

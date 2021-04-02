@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include "weirdmath.h"
+
 #define BUTTON_CLOCK 48
 #define BUTTON_DATA 49
 #define BUTTON_LATCH 50
@@ -23,6 +25,15 @@
 #define PAD_LEFT 0x40
 #define PAD_RIGHT 0x80
 
+#define KEYLAYER_0 0
+#define KEYLAYER_1 1
+#define KEYLAYER_2 2
+#define KEYLAYER_3 3
+#define KEYLAYER_4 4
+#define KEYLAYER_5 5
+
+enum class Keymod { a, b, ab, select, start, none };
+
 class Controls {
 public:
   void begin();
@@ -38,3 +49,17 @@ private:
   uint32_t justpressed_buttons;
   uint32_t justreleased_buttons;
 };
+
+enum class MenuMode { live, menu1, menu2 };
+
+enum class Menu1Control { env, mod, filter, delay };
+
+enum class Menu2Control { bpm, chain, wave, file };
+
+Menu1Control &operator++(Menu1Control &s);
+
+Menu1Control &operator--(Menu1Control &s);
+
+Menu2Control &operator++(Menu2Control &s);
+
+Menu2Control &operator--(Menu2Control &s);
